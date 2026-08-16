@@ -23,8 +23,7 @@ runtime only when a component declares an interaction.
 
 ## Install
 
-During the beta, install the repository as a Composer VCS dependency. A normal
-Packagist installation will become available after the package is registered.
+Install the public beta directly from Packagist:
 
 ```bash
 composer require phpaml/view:^0.1@beta
