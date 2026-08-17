@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 $root = dirname(__DIR__, 2);
+$vendorAutoload = $root . '/vendor/autoload.php';
+if (is_file($vendorAutoload)) {
+    require $vendorAutoload;
+}
 
 spl_autoload_register(static function (string $class) use ($root): void {
     $prefixes = [
