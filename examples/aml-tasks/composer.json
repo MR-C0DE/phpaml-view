@@ -1,0 +1,19 @@
+{
+  "name": "phpaml/aml-tasks-demo",
+  "description": "Complete AML View demonstration application.",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": "^8.2",
+    "phpaml/view": "^0.1@beta"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "src/",
+      "App\\Views\\": "src/views/",
+      "App\\Support\\": "src/support/",
+      "App\\Controllers\\": "src/controllers/",
+      "App\\Models\\": "src/models/"
+    }
+  }
+}

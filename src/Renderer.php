@@ -4,16 +4,14 @@ declare(strict_types=1);
 
 namespace AML\View;
 
+use AML\Engine\StateNamespace;
+
 final class Renderer
 {
     public function render(View $view): string
     {
+        StateNamespace::reset();
         return $view->render(new RenderContext());
-    }
-
-    public function interactive(View $view): RenderedView
-    {
-        return new RenderedView($view);
     }
 
     public function renderPage(Page $page, ?Layout $layout = null): string
