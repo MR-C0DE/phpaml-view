@@ -10,6 +10,10 @@ if (is_file($vendorAutoload)) {
 
 spl_autoload_register(static function (string $class) use ($root): void {
     $prefixes = [
+        'App\\Views\\' => __DIR__ . '/src/views/',
+        'App\\Support\\' => __DIR__ . '/src/support/',
+        'App\\Controllers\\' => __DIR__ . '/src/controllers/',
+        'App\\Models\\' => __DIR__ . '/src/models/',
         'App\\' => __DIR__ . '/src/',
         'AML\\View\\' => $root . '/src/',
         'AML\\Engine\\' => dirname($root) . '/phpaml-engine/src/',
