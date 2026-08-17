@@ -19,4 +19,5 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
       - run: composer validate --strict
+      - run: composer install --no-interaction --prefer-dist
       - run: composer test

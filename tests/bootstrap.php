@@ -3,6 +3,11 @@
 declare(strict_types=1);
 
 $root = dirname(__DIR__);
+$vendorAutoload = $root . '/vendor/autoload.php';
+if (is_file($vendorAutoload)) {
+    require $vendorAutoload;
+}
+
 spl_autoload_register(static function (string $class) use ($root): void {
     $prefixes = [
         'AML\\View\\' => $root . '/src/',
@@ -15,4 +20,4 @@ spl_autoload_register(static function (string $class) use ($root): void {
         return;
     }
 });
-require $root . '/src/functions.php';
+require_once $root . '/src/functions.php';
