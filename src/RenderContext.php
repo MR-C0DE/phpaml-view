@@ -4,35 +4,28 @@ declare(strict_types=1);
 
 namespace AML\View;
 
-use Closure;
-
 final class RenderContext
 {
-    private EventRegistry $registry;
-
-    public function __construct(private ?View $content = null, ?EventRegistry $registry = null)
-    {
-        $this->registry = $registry ?? new EventRegistry();
-    }
+    /** @param array<string, mixed> $contexts */
+    public function __construct(private ?View $content = null, private array $contexts = []) {}
 
     public function content(): ?View
     {
         return $this->content;
     }
 
-    public function registerEvent(Closure $handler): string
-    {
-        return $this->registry->register($handler);
-    }
-
-    /** @return array<string, Closure> */
-    public function events(): array
-    {
-        return $this->registry->all();
-    }
-
     public function withContent(View $content): self
     {
-        return new self($content, $this->registry);
+        return new self($content, $this->contexts);
+    }
+
+    public function withContext(string $name, mixed $value): self
+    {
+        return new self($this->content, [...$this->contexts, $name => $value]);
+    }
+
+    public function context(string $name, mixed $fallback = null): mixed
+    {
+        return $this->contexts[$name] ?? $fallback;
     }
 }

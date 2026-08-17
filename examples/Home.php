@@ -2,20 +2,24 @@
 
 declare(strict_types=1);
 
+use AML\Engine\ClientAction;
+use AML\Engine\StateRef;
 use AML\View\Page;
+use AML\View\State;
 use AML\View\View;
-use function AML\View\{Action, Column, Heading, state};
+use function AML\View\{Button, Column, Heading, Text};
 
 final class Home extends Page
 {
+    #[State]
+    public int $count = 0;
+
     public function body(): View
     {
-        $count = state(0);
-
         return Column(
             Heading('Hello PHP')->size(42)->bold(),
-            Action(fn () => "Count: {$count->value()}")
-                ->click(fn () => $count->increment()),
+            Text(StateRef::to('count', $this->count)),
+            Button('Add one')->onClick(ClientAction::increment('count')),
         )
             ->center()
             ->spacing(16)

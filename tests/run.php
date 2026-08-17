@@ -4,40 +4,88 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use AML\View\Layout;
-use AML\View\InteractionKernel;
-use AML\View\Page;
-use AML\View\Email;
+use AML\Engine\Actions;
+use AML\Engine\Api;
+use AML\Engine\ClientAction;
+use AML\Engine\Effects;
+use AML\Engine\StateRef;
+use AML\View\Component;
+use AML\View\AMLView;
 use AML\View\Computed;
-use AML\View\MinLength;
-use AML\View\RenderContext;
-use AML\View\Required;
-use AML\View\ActionStatus;
-use AML\View\Router;
+use AML\View\Effect;
+use AML\View\FileApplication;
+use AML\View\Layout;
+use AML\View\Page;
+use AML\View\PageMetadata;
+use AML\View\Persisted;
 use AML\View\Renderer;
+use AML\View\Router;
 use AML\View\State;
+use AML\View\Shared;
 use AML\View\View;
-use function AML\View\{Action, Alert, Button, Checkbox, Column, Content, Form, Grid, Heading, Image, Input, Link, MainContent, RouterView, Row, Select, Slot, Spacer, state, Text, VStack, ZStack};
+use AML\View\Testing\ViewTest;
+use AML\View\Testing\TestExpectationFailed;
 
-final class AttributeCounterPage extends Page
-{
-    #[State]
-    public int $count = 0;
-
-    public function body(): View
-    {
-        return VStack(
-            Heading('AML View')->size(42)->bold(),
-            Text("Current value: {$this->count}"),
-            Button('Add one')->onClick(fn () => $this->count++),
-        )->gap(16)->padding(40);
-    }
-}
+use function AML\View\Button;
+use function AML\View\Each;
+use function AML\View\Group;
+use function AML\View\Heading;
+use function AML\View\Input;
+use function AML\View\Link;
+use function AML\View\Slot;
+use function AML\View\Text;
+use function AML\View\ThemeProvider;
+use function AML\View\ThemeSwitcher;
+use function AML\View\VStack;
+use function AML\View\When;
+use function AML\View\Accordion;
+use function AML\View\AsyncBoundary;
+use function AML\View\DataTable;
+use function AML\View\DynamicForm;
+use function AML\View\Modal;
+use function AML\View\SortableEach;
+use function AML\View\Tabs;
+use function AML\View\VirtualList;
+use function AML\View\Toast;
+use function AML\View\Dropdown;
+use function AML\View\MenuItem;
+use function AML\View\Tooltip;
+use function AML\View\Popover;
+use function AML\View\FileInput;
+use function AML\View\ConditionalField;
+use function AML\View\MultiStepForm;
+use function AML\View\TextArea;
+use function AML\View\UploadForm;
+use function AML\View\ContextProvider;
+use function AML\View\ContextText;
+use function AML\View\Navigate;
+use function AML\View\NavigationBoundary;
+use function AML\View\Redirect;
+use function AML\View\RouterView;
 
 $passed = 0;
 $failed = 0;
 
-function check(string $name, callable $test): void
+final class ViewTestingFixturePage extends Page
+{
+    #[State] public int $count = 0;
+    #[State] public string $name = '';
+    #[State] public array $items = [1];
+    public function body(): View
+    {
+        return Group(
+            Heading('Testing')->component('TestHeading'),
+            Text(StateRef::to('count', 0)),
+            Button('Add')->onClick(ClientAction::increment('count')),
+            Button('Conditional')->onClick(Actions::when('count', 'gt', 0, ClientAction::set('count', 9))),
+            Button('Append')->onClick(ClientAction::append('items', 2)),
+            Input('name')->bindClient('name'),
+            Button('Account')->onClick(Navigate('/account', true)),
+        );
+    }
+}
+
+function check(string $name, Closure $test): void
 {
     global $passed, $failed;
     try {
@@ -50,396 +98,563 @@ function check(string $name, callable $test): void
     }
 }
 
-function same(mixed $expected, mixed $actual): void
+function expect(bool $condition, string $message): void
 {
-    if ($expected !== $actual) {
-        throw new RuntimeException('Expected ' . var_export($expected, true) . ', got ' . var_export($actual, true));
-    }
+    if (!$condition) throw new RuntimeException($message);
 }
 
-check('Text escapes unsafe HTML', function (): void {
-    same('<span>&lt;script&gt;alert(1)&lt;/script&gt;</span>', (new Renderer())->render(Text('<script>alert(1)</script>')));
+$renderer = new Renderer();
+
+check('Public beta contract excludes the removed server runtime', function (): void {
+    expect(AMLView::VERSION === '0.1.0-beta.3', 'AML View version is inconsistent.');
+    foreach ([
+        'AML\\View\\BrowserRuntime',
+        'AML\\View\\InteractionKernel',
+        'AML\\View\\InteractionResult',
+        'AML\\View\\TokenSigner',
+        'AML\\View\\StateCycle',
+        'AML\\View\\StateValue',
+        'AML\\View\\Required',
+    ] as $removed) {
+        expect(!class_exists($removed), "Removed class still exists: {$removed}");
+    }
+    foreach (['onServerClick', 'onSubmit', 'onInput', 'onChange', 'bind'] as $removedMethod) {
+        expect(!method_exists(AML\View\Element::class, $removedMethod), "Removed method still exists: {$removedMethod}");
+    }
+    expect(!function_exists('AML\\View\\state'), 'Removed state() helper still exists.');
 });
 
-check('Column renders its layout and modifiers', function (): void {
-    $html = (new Renderer())->render(Column(Heading('Hello')->size(42))->center()->padding(40));
-    same('<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px"><h1 style="font-size:42px">Hello</h1></div>', $html);
+check('Text escapes unsafe HTML', function () use ($renderer): void {
+    $html = $renderer->render(Text('<script>'));
+    expect(str_contains($html, '&lt;script&gt;') && !str_contains($html, '<script>'), 'Unsafe text was not escaped.');
 });
 
-check('State updates numeric values', function (): void {
-    $count = state(0);
-    $count->increment()->increment(2)->decrement();
-    same(2, $count->value());
+check('Group renders siblings without a wrapper', function () use ($renderer): void {
+    $html = $renderer->render(Group(Text('A'), Text('B')));
+    expect($html === '<span>A</span><span>B</span>', 'Group added a wrapper.');
 });
 
-check('Dynamic text reads the latest state value', function (): void {
-    $count = state(1);
-    $view = Text($count);
-    $count->set(5);
-    same('<span>5</span>', (new Renderer())->render($view));
+check('Element and Component factories avoid explicit construction', function () use ($renderer): void {
+    $component = new class extends Component {
+        public function body(): View { return Text('Factory component'); }
+    };
+    $factory = \AML\View\Component($component::class);
+    $html = $renderer->render(\AML\View\Element('section', $factory));
+    expect($html === '<section><span>Factory component</span></section>', 'Declarative factories did not construct the expected view tree.');
+    try {
+        \AML\View\Component(\stdClass::class);
+        throw new RuntimeException('An invalid component factory target was accepted.');
+    } catch (InvalidArgumentException) {
+    }
 });
 
-check('Events receive an AML identifier', function (): void {
-    $context = new RenderContext();
-    $html = Action('Continue')->click(static fn () => null)->render($context);
-    same('<button type="button" data-aml-click="aml-1">Continue</button>', $html);
-    same(1, count($context->events()));
+check('Classes are explicit and deduplicated', function () use ($renderer): void {
+    $html = $renderer->render(VStack(Text('Home'))->class('home', 'featured', 'home'));
+    expect(str_contains($html, 'class="home featured"'), 'Classes were not rendered correctly.');
 });
 
-check('Dispatch updates state and rerenders the component', function (): void {
-    $counter = new class extends Page {
-        public function body(): View
-        {
-            $count = state(0);
-            return Column(
-                Text($count),
-                Action('Add')->click(fn () => $count->increment()),
+check('Theme primitives render without a content wrapper', function () use ($renderer): void {
+    $html = $renderer->render(ThemeProvider('dark', Group(ThemeSwitcher('light', 'dark'), Text('Theme'))));
+    expect(str_contains($html, 'data-default="dark"') && str_contains($html, 'Theme'), 'Theme primitives failed.');
+});
+
+check('Page metadata escapes SEO values', function (): void {
+    $head = (new PageMetadata(title: '<Home>', description: 'A & B'))->render();
+    expect(str_contains($head, '&lt;Home&gt;') && str_contains($head, 'A &amp; B'), 'Metadata was not escaped.');
+});
+
+check('Client state emits no server event identifier', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View {
+            return VStack(
+                Text(StateRef::to('count', $this->count)),
+                Button('Add')->onClick(ClientAction::increment('count')),
             );
         }
     };
-
-    $rendered = (new Renderer())->interactive($counter);
-    if (!str_contains($rendered->html(), '<span>0</span>')) {
-        throw new RuntimeException('Initial state was not rendered.');
-    }
-
-    $rendered->dispatch('aml-1');
-    if (!str_contains($rendered->html(), '<span>1</span>')) {
-        throw new RuntimeException('Updated state was not rendered.');
-    }
+    $html = $renderer->render($page);
+    expect(str_contains($html, 'data-aml-client-click') && !str_contains($html, 'data-aml-click='), 'A server event leaked into client HTML.');
 });
 
-check('Layout Content renders the active page', function (): void {
+check('Shared and persisted state emit a frontend configuration', function () use ($renderer): void {
     $page = new class extends Page {
-        public function body(): View { return Text('Dashboard'); }
+        #[State, Shared('application.theme'), Persisted('local', 'phpaml.theme', version: 2, expiresAfter: 3600)]
+        public string $theme = 'dark';
+        #[State, Persisted('session')]
+        public int $step = 1;
+        public function body(): View { return Text(StateRef::to('theme', $this->theme)); }
+    };
+    $html = $renderer->render($page);
+    expect(
+        str_contains($html, 'data-aml-state-config')
+        && str_contains($html, 'application.theme')
+        && str_contains($html, 'phpaml.theme')
+        && str_contains($html, '&quot;version&quot;:2')
+        && str_contains($html, '&quot;expiresAfter&quot;:3600')
+        && str_contains($html, '&quot;session&quot;'),
+        'Shared or persisted state configuration is missing.',
+    );
+});
+
+check('Reusable component instances receive isolated state scopes', function () use ($renderer): void {
+    $factory = static fn () => new class extends Component {
+        #[State] public int $count = 0;
+        public function body(): View {
+            return Group(
+                Text(StateRef::to('count', $this->count)),
+                Button('Add')->onClick(ClientAction::increment('count')),
+            );
+        }
+    };
+    $html = $renderer->render(Group($factory(), $factory()));
+    preg_match_all('/data-aml-bind="([^"]+\.i[12]\.count)"/', $html, $matches);
+    expect(
+        count(array_unique($matches[1])) === 2
+        && substr_count($html, 'data-aml-state=') === 2,
+        'Component state instances are not isolated.',
+    );
+});
+
+check('Page state remains root-scoped inside a reusable layout', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View { return Text(StateRef::to('count', $this->count)); }
     };
     $layout = new class extends Layout {
-        public function body(): View { return Row(Text('Sidebar'), MainContent(Content())); }
+        public function body(): View { return Slot(); }
     };
-
-    same(
-        '<div style="display:flex;flex-direction:row"><span>Sidebar</span><main><span>Dashboard</span></main></div>',
-        (new Renderer())->renderPage($page, $layout),
+    $html = $renderer->renderPage($page, $layout);
+    expect(
+        str_contains($html, 'data-aml-bind="count"')
+        && !str_contains($html, 'data-aml-bind="components.'),
+        'Layout scope leaked into page state.',
     );
 });
 
-check('Signed browser interaction rebuilds and updates state', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('k', 32)))
-        ->register('counter', static fn (): View => new class extends Page {
-            public function body(): View
-            {
-                $count = state(0);
-                return Column(
-                    Text($count),
-                    Action('Add')->click(fn () => $count->increment()),
-                );
-            }
-        });
-
-    $mounted = $kernel->mount('counter');
-    if (!str_contains($mounted->rootHtml(), 'data-aml-root')) {
-        throw new RuntimeException('Interactive root was not generated.');
-    }
-
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1');
-    if (!str_contains($updated->html(), '<span>1</span>')) {
-        throw new RuntimeException('Browser interaction did not update state.');
-    }
-});
-
-check('#[State] properties rerender with the AML View syntax', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('a', 32)))
-        ->register('attribute-counter', static fn (): View => new AttributeCounterPage());
-
-    $mounted = $kernel->mount('attribute-counter');
-    if (!str_contains($mounted->html(), 'Current value: 0')) {
-        throw new RuntimeException('The initial #[State] value was not rendered.');
-    }
-
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1');
-    if (!str_contains($updated->html(), 'Current value: 1')) {
-        throw new RuntimeException('The #[State] property did not trigger a new body render.');
-    }
-    if (!str_contains($updated->html(), 'gap:16px')) {
-        throw new RuntimeException('VStack gap modifier was not rendered.');
-    }
-});
-
-check('Interaction tokens reject tampering', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('s', 32)))
-        ->register('simple', static fn (): View => Text('Safe'));
-    $token = $kernel->mount('simple')->token();
-    try {
-        $kernel->dispatch($token . 'x', 'aml-1');
-        throw new RuntimeException('Tampered token was accepted.');
-    } catch (UnexpectedValueException) {
-        // Expected.
-    }
-});
-
-check('Interaction tokens cannot be replayed', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('r', 32)))
-        ->register('replay', static fn (): View => Action('Once')->onClick(static fn () => null));
-    $mounted = $kernel->mount('replay');
-    $kernel->dispatch($mounted->token(), 'aml-1');
-    try {
-        $kernel->dispatch($mounted->token(), 'aml-1');
-        throw new RuntimeException('A consumed interaction token was accepted twice.');
-    } catch (UnexpectedValueException $error) {
-        if (!str_contains($error->getMessage(), 'already used')) {
-            throw $error;
+check('Dangerous JavaScript state paths are rejected', function (): void {
+    foreach (['__proto__.polluted', 'user.constructor.value', 'prototype.value'] as $path) {
+        try {
+            ClientAction::set($path, true);
+            throw new RuntimeException("Dangerous path was accepted: {$path}");
+        } catch (InvalidArgumentException) {
         }
     }
 });
 
-check('Interaction tokens are bound to their audience', function (): void {
-    $secret = str_repeat('u', 32);
-    $first = (new InteractionKernel($secret, null, 'session-one'))
-        ->register('audience', static fn (): View => Action('Run')->onClick(static fn () => null));
-    $second = (new InteractionKernel($secret, null, 'session-two'))
-        ->register('audience', static fn (): View => Action('Run')->onClick(static fn () => null));
-    $token = $first->mount('audience')->token();
-    try {
-        $second->dispatch($token, 'aml-1');
-        throw new RuntimeException('A token crossed its security audience.');
-    } catch (UnexpectedValueException) {
-        // Expected.
-    }
+check('Client bindings remain local', function () use ($renderer): void {
+    $html = $renderer->render(Input('name', value: 'AML')->bindClient('name'));
+    expect(str_contains($html, 'data-aml-model="name"') && !str_contains($html, 'data-aml-change'), 'Binding is not frontend-only.');
 });
 
-check('Forms submit their values to event handlers', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('f', 32)))
-        ->register('form', static fn (): View => new class extends Page {
-            #[State]
-            public string $name = '';
-
-            public function body(): View
-            {
-                return Form(
-                    Input('name', value: $this->name),
-                    Button('Save'),
-                    Text($this->name),
-                )->onSubmit(function (array $data): void {
-                    $this->name = trim((string) ($data['name'] ?? ''));
-                });
-            }
-        });
-
-    $mounted = $kernel->mount('form');
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1', ['name' => '  André  ']);
-    if (!str_contains($updated->html(), '<span>André</span>')) {
-        throw new RuntimeException('Submitted form data did not update #[State].');
-    }
+check('Frontend validation rules are declarative and accessible', function () use ($renderer): void {
+    $html = $renderer->render(
+        Input('email')->bindClient('email')->required('Email required')->email()->minLength(6),
+    );
+    expect(
+        str_contains($html, 'data-aml-validate')
+        && str_contains($html, '&quot;required&quot;')
+        && str_contains($html, '&quot;email&quot;')
+        && str_contains($html, '&quot;min-length&quot;'),
+        'Frontend validation rules are missing.',
+    );
 });
 
-check('Oversized interaction data is rejected', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('l', 32)))
-        ->register('limited', static fn (): View => Action('Run')->onClick(static fn () => null));
-    $mounted = $kernel->mount('limited');
-    try {
-        $kernel->dispatch($mounted->token(), 'aml-1', ['value' => str_repeat('x', 70000)]);
-        throw new RuntimeException('An oversized payload was accepted.');
-    } catch (LengthException) {
-        // Expected.
-    }
+check('Async validation uses an explicit same-origin API action', function () use ($renderer): void {
+    $html = $renderer->render(
+        Input('name')
+            ->bindClient('name')
+            ->validateWith(Api::get('/api/validate-name', ['name' => StateRef::to('name')]), debounce: 250),
+    );
+    expect(
+        str_contains($html, 'data-aml-validate-api')
+        && str_contains($html, '/api/validate-name')
+        && str_contains($html, '&quot;debounce&quot;:250'),
+        'Explicit asynchronous validation is missing.',
+    );
 });
 
-check('Input binding updates a #[State] property', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('b', 32)))
-        ->register('binding', static fn (): View => new class extends Page {
-            #[State]
-            public string $name = 'Initial';
-
-            public function body(): View
-            {
-                return VStack(
-                    Input('name')->bind($this, 'name'),
-                    Text($this->name),
-                );
-            }
-        });
-
-    $mounted = $kernel->mount('binding');
-    if (!str_contains($mounted->html(), 'value="Initial"')) {
-        throw new RuntimeException('The bound initial value was not rendered.');
-    }
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1', ['value' => 'André']);
-    if (!str_contains($updated->html(), '<span>André</span>')) {
-        throw new RuntimeException('The bound #[State] property was not updated.');
-    }
+check('Explicit API actions are encoded separately', function () use ($renderer): void {
+    $html = $renderer->render(Button('Load')->onClick(Api::get('/api/health')->storeIn('health')));
+    expect(str_contains($html, '&quot;type&quot;:&quot;api&quot;') && str_contains($html, '/api/health'), 'API action is missing.');
 });
 
-check('Checkbox binding converts browser values to bool', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('c', 32)))
-        ->register('checkbox', static fn (): View => new class extends Page {
-            #[State]
-            public bool $accepted = false;
-            public function body(): View
-            {
-                return VStack(
-                    Checkbox('accepted')->bind($this, 'accepted'),
-                    Text($this->accepted ? 'yes' : 'no'),
-                );
-            }
-        });
-    $mounted = $kernel->mount('checkbox');
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1', ['value' => true]);
-    if (!str_contains($updated->html(), '<span>yes</span>') || !str_contains($updated->html(), ' checked')) {
-        throw new RuntimeException('Checkbox binding did not retain its boolean state.');
-    }
+check('Actions compose and branch in the browser', function () use ($renderer): void {
+    $action = Actions::sequence(
+        ClientAction::increment('count'),
+        Actions::when('count', 'gte', 2, ClientAction::set('ready', true)),
+    );
+    $html = $renderer->render(Button('Run')->onClick($action));
+    expect(str_contains($html, '&quot;type&quot;:&quot;sequence&quot;') && str_contains($html, '&quot;type&quot;:&quot;condition&quot;'), 'Composition is missing.');
 });
 
-check('Select renders choices safely', function (): void {
-    $html = (new Renderer())->render(Select('locale', ['fr' => 'Français', 'en' => '<English>'], 'fr'));
-    if (!str_contains($html, 'value="fr" selected') || !str_contains($html, '&lt;English&gt;')) {
-        throw new RuntimeException('Select choices were not rendered correctly.');
-    }
+check('Reactive presentation is declared in HTML', function () use ($renderer): void {
+    $html = $renderer->render(
+        Button('Toggle')
+            ->showWhen(StateRef::to('open', false))
+            ->classWhen(StateRef::to('open', false), 'active')
+            ->disabledWhen(StateRef::to('busy', true)),
+    );
+    expect(str_contains($html, 'data-aml-show-when') && str_contains($html, 'data-aml-class-when') && str_contains($html, 'data-aml-disabled-when'), 'Reactive rules are missing.');
 });
 
-check('Declarative validation renders an accessible field error', function (): void {
-    $kernel = (new InteractionKernel(str_repeat('v', 32)))
-        ->register('validated', static fn (): View => new class extends Page {
-            #[State]
-            #[Required('Email is required.')]
-            #[Email('Email is invalid.')]
-            public string $email = '';
-
-            public function body(): View
-            {
-                return Input('email', 'email')->bind($this, 'email');
-            }
-        });
-
-    $mounted = $kernel->mount('validated');
-    $invalid = $kernel->dispatch($mounted->token(), 'aml-1', ['value' => 'not-an-email']);
-    if (!str_contains($invalid->html(), 'aria-invalid="true"')
-        || !str_contains($invalid->html(), 'role="alert">Email is invalid.</small>')) {
-        throw new RuntimeException('The validation error was not rendered accessibly.');
-    }
-
-    $valid = $kernel->dispatch($invalid->token(), 'aml-1', ['value' => 'hello@example.com']);
-    if (str_contains($valid->html(), 'aria-invalid') || !str_contains($valid->html(), 'value="hello@example.com"')) {
-        throw new RuntimeException('A valid value did not clear the field error.');
-    }
+check('Each renders escaped initial collections', function () use ($renderer): void {
+    $html = $renderer->render(Each(StateRef::to('tasks', [['id' => 1, 'title' => '<Task>']]), label: 'title', key: 'id'));
+    expect(str_contains($html, '&lt;Task&gt;') && str_contains($html, 'data-aml-list="tasks"'), 'Reactive collection failed.');
 });
 
-check('Required and MinLength rules validate in declaration order', function (): void {
-    $component = new class extends Page {
-        #[State]
-        #[Required('Password required.')]
-        #[MinLength(8, 'Password too short.')]
-        public string $password = '';
-        public function body(): View { return Input('password')->bind($this, 'password'); }
-    };
-
-    if ($component->validateProperty('password', '') || $component->validationError('password') !== 'Password required.') {
-        throw new RuntimeException('Required did not validate the empty value first.');
-    }
-    if ($component->validateProperty('password', 'short') || $component->validationError('password') !== 'Password too short.') {
-        throw new RuntimeException('MinLength did not reject the short value.');
-    }
-    if (!$component->validateProperty('password', 'long-enough') || $component->validationError('password') !== null) {
-        throw new RuntimeException('Valid data did not clear validation errors.');
-    }
-});
-
-check('Form submission validates every bound field before its action', function (): void {
-    $tracker = (object) ['saved' => false];
-    $kernel = (new InteractionKernel(str_repeat('m', 32)))
-        ->register('submit-validation', static fn (): View => new class($tracker) extends Page {
-            #[State]
-            #[Required('Name required.')]
-            public string $name = '';
-            public function __construct(private object $tracker) {}
-            public function body(): View
-            {
-                return Form(
-                    Input('name')->bind($this, 'name'),
-                    Button('Save'),
-                )->onSubmit(function (): void { $this->tracker->saved = true; });
-            }
-        });
-
-    $mounted = $kernel->mount('submit-validation');
-    $invalid = $kernel->dispatch($mounted->token(), 'aml-1', ['name' => '']);
-    if ($tracker->saved || !str_contains($invalid->html(), 'Name required.')) {
-        throw new RuntimeException('Invalid submission was not blocked.');
-    }
-    $kernel->dispatch($invalid->token(), 'aml-1', ['name' => 'AML']);
-    if (!$tracker->saved) {
-        throw new RuntimeException('Valid submission did not execute its action.');
-    }
-});
-
-check('#[Computed] evaluates once per render without becoming state', function (): void {
-    $calls = (object) ['count' => 0];
-    $kernel = (new InteractionKernel(str_repeat('q', 32)))
-        ->register('computed', static fn (): View => new class($calls) extends Page {
-        #[State]
-        public int $count = 1;
-        public function __construct(private object $calls) {}
-        #[Computed]
-        protected function doubled(): int { $this->calls->count++; return $this->count * 2; }
-        public function body(): View { return VStack(Text((string) $this->doubled), Text((string) $this->doubled), Button('Add')->onClick(fn () => $this->count++)); }
-    });
-    $mounted = $kernel->mount('computed');
-    same(1, $calls->count);
-    if (substr_count($mounted->html(), '<span>2</span>') !== 2) {
-        throw new RuntimeException('Computed value was not rendered twice.');
-    }
-    $updated = $kernel->dispatch($mounted->token(), 'aml-1');
-    same(3, $calls->count); // one event-registration render, then one updated render
-    if (substr_count($updated->html(), '<span>4</span>') !== 2) {
-        throw new RuntimeException('Computed value did not refresh with state.');
-    }
-});
-
-check('Grid, ZStack, Spacer, Image and Link render semantic HTML', function (): void {
-    $html = (new Renderer())->render(Grid(2,
-        ZStack(Image('/logo.png', 'AML View'), Text('Overlay')),
-        Spacer(),
-        Link('Documentation', '/docs'),
+check('Nested collection labels are rendered safely', function () use ($renderer): void {
+    $html = $renderer->render(Each(
+        StateRef::to('users', [['id' => 1, 'profile' => ['name' => '<André>']]]),
+        label: 'profile.name',
+        key: 'id',
     ));
-    if (!str_contains($html, 'grid-template-columns:repeat(2,minmax(0,1fr))')
-        || !str_contains($html, '<img src="/logo.png" alt="AML View"')
-        || !str_contains($html, '<a href="/docs">Documentation</a>')
-        || !str_contains($html, 'grid-area:1/1')) {
-        throw new RuntimeException('One or more visual components rendered incorrectly.');
-    }
+    expect(str_contains($html, '&lt;André&gt;') && str_contains($html, 'data-aml-list-label="profile.name"'), 'Nested collection label failed.');
 });
 
-check('RouterView resolves parameters and renders a layout Slot', function (): void {
-    $router = (new Router())->get(
-        '/users/{id}',
-        static fn (array $params): View => new class($params['id']) extends Page {
-            public function __construct(private string $id) {}
-            public function body(): View { return Text('User ' . $this->id); }
-        },
-        static fn (): Layout => new class extends Layout {
-            public function body(): View { return MainContent(Slot()); }
-        },
+check('Each renders reusable custom item views and a client template', function () use ($renderer): void {
+    $html = $renderer->render(Each(
+        StateRef::to('tasks', [['id' => 1, 'title' => '<Ship>']]),
+        key: 'id',
+        render: static fn (\AML\View\CollectionItem $item): View => VStack(
+            Text('Task:'),
+            $item->text('title'),
+        ),
+    ));
+    expect(
+        str_contains($html, 'data-aml-list-template')
+        && str_contains($html, 'data-aml-item-bind="title"')
+        && str_contains($html, '&lt;Ship&gt;'),
+        'Custom collection item template failed.',
     );
-    same('<main><span>User 42</span></main>', (new Renderer())->render(RouterView($router, '/users/42?tab=profile')));
 });
 
-check('Action statuses expose loading, disabled, success and error semantics', function (): void {
-    $loading = (new Renderer())->render(Button('Save')->status(ActionStatus::Loading)->loadingLabel('Saving…'));
-    $success = (new Renderer())->render(Alert('Saved', ActionStatus::Success));
-    $error = (new Renderer())->render(Alert('Failed', ActionStatus::Error));
-    if (!str_contains($loading, 'disabled') || !str_contains($loading, 'aria-busy="true"')
-        || !str_contains($success, 'role="status"') || !str_contains($error, 'role="alert"')) {
-        throw new RuntimeException('Action status semantics are incomplete.');
+check('Persisted state declares migrations and IndexedDB', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State, Persisted(storage: 'indexeddb', version: 2, migrations: [
+            2 => ['rename' => ['displayName' => 'profile.name'], 'defaults' => ['active' => true]],
+        ])]
+        public array $profile = ['profile' => ['name' => 'AML']];
+        public function body(): View { return Text('Persisted'); }
+    };
+    $html = $renderer->render($component);
+    expect(str_contains($html, 'indexeddb') && str_contains($html, 'displayName') && str_contains($html, 'profile.name'), 'Advanced persistence config failed.');
+});
+
+check('Diagnostics history is opt-in on page roots', function (): void {
+    $result = new \AML\View\PageResult('<p>Page</p>');
+    expect(!str_contains($result->rootHtml(), 'data-aml-history'), 'History must be disabled by default.');
+    expect(str_contains($result->rootHtml(diagnostics: true), 'data-aml-history="100"'), 'Diagnostics history opt-in failed.');
+});
+
+check('Dangerous collection and migration paths are rejected', function (): void {
+    try {
+        Each(StateRef::to('items', []), label: '__proto__.value');
+        throw new RuntimeException('Dangerous collection label was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+    try {
+        new Persisted(version: 2, migrations: [2 => ['rename' => ['name' => 'constructor.value']]]);
+        throw new RuntimeException('Dangerous migration path was accepted.');
+    } catch (InvalidArgumentException) {
     }
 });
 
-check('Browser runtime supports every public interaction event', function (): void {
-    $script = AML\View\BrowserRuntime::script('/interactions');
-    foreach (['click', 'submit', 'change', 'input'] as $event) {
-        if (!str_contains($script, "addEventListener('{$event}'")) {
-            throw new RuntimeException("Browser runtime is missing the {$event} event.");
+check('Native navigation can be requested explicitly', function () use ($renderer): void {
+    expect(str_contains($renderer->render(Link('Outside', '/classic')->nativeNavigation()), 'data-aml-native-navigation="true"'), 'Native navigation marker missing.');
+});
+
+check('#[Computed] is cached for one render', function () use ($renderer): void {
+    $component = new class extends Component {
+        public int $calls = 0;
+        #[Computed] protected function label(): string { $this->calls++; return 'Ready'; }
+        public function body(): View { return Group(Text($this->label), Text($this->label)); }
+    };
+    expect($renderer->render($component) === '<span>Ready</span><span>Ready</span>' && $component->calls === 1, 'Computed value was not cached.');
+});
+
+check('#[Computed] declares safe frontend dependencies', function () use ($renderer): void {
+    $component = new class extends Component {
+        #[State] public string $first = 'AML';
+        #[State] public string $last = 'View';
+        #[Computed(dependencies: ['first', 'last'], operation: 'concat', separator: ' ')]
+        protected function fullName(): string { return $this->first . ' ' . $this->last; }
+        public function body(): View { return Text(StateRef::to('fullName', $this->fullName)); }
+    };
+    $html = $renderer->render($component);
+    expect(str_contains($html, '&quot;computed&quot;') && str_contains($html, 'fullName') && str_contains($html, '&quot;separator&quot;:&quot; &quot;'), 'Frontend computed manifest failed.');
+});
+
+check('When renders both inert branches and the initial branch', function () use ($renderer): void {
+    $html = $renderer->render(When(StateRef::to('ready', true), Text('Ready'), Text('Waiting')));
+    expect(str_contains($html, 'data-aml-when') && str_contains($html, 'data-aml-when-then') && str_contains($html, '>Ready</span>'), 'Conditional rendering failed.');
+});
+
+check('#[Effect] emits scoped dependencies and declarative actions', function () use ($renderer): void {
+    $component = new class extends Component {
+        #[State] public int $count = 0;
+        #[State] public int $derived = 0;
+        #[Effect(dependencies: ['count'], debounce: 120, throttle: 300, concurrency: 'queue')]
+        protected function synchronize(): \AML\Engine\EffectPlan {
+            return Effects::run(ClientAction::set('derived', StateRef::to('count')));
+        }
+        public function body(): View { return Text(StateRef::to('derived', $this->derived)); }
+    };
+    $html = $renderer->render($component);
+    expect(
+        str_contains($html, '&quot;effects&quot;')
+        && str_contains($html, 'synchronize')
+        && str_contains($html, '&quot;debounce&quot;:120')
+        && str_contains($html, '&quot;concurrency&quot;:&quot;queue&quot;')
+        && str_contains($html, '&quot;throttle&quot;:300')
+        && substr_count($html, 'components.') >= 3,
+        'Effect manifest or component scoping failed.',
+    );
+});
+
+check('#[Effect] rejects unusable declarations', function (): void {
+    try {
+        new Effect(concurrency: 'unsafe');
+        throw new RuntimeException('Invalid effect concurrency was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+    try {
+        new Effect(debounce: 60_001);
+        throw new RuntimeException('Invalid effect debounce was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+    try {
+        new Effect(throttle: 60_001);
+        throw new RuntimeException('Invalid effect throttle was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+    try {
+        new Effect(runOnMount: false);
+        throw new RuntimeException('An unreachable effect was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+});
+
+check('#[Effect] rejects invalid method contracts', function () use ($renderer): void {
+    $invalidReturn = new class extends Component {
+        #[Effect] protected function broken(): string { return 'not-an-effect'; }
+        public function body(): View { return Text('Broken'); }
+    };
+    try {
+        $renderer->render($invalidReturn);
+        throw new RuntimeException('Invalid effect return type was accepted.');
+    } catch (LogicException) {
+    }
+    $invalidParameter = new class extends Component {
+        #[Effect] protected function broken(string $required): \AML\Engine\EffectPlan { return Effects::run(ClientAction::set('value', $required)); }
+        public function body(): View { return Text('Broken'); }
+    };
+    try {
+        $renderer->render($invalidParameter);
+        throw new RuntimeException('Required effect parameter was accepted.');
+    } catch (LogicException) {
+    }
+});
+
+check('Effects support timers and browser listeners', function () use ($renderer): void {
+    $component = new class extends Component {
+        #[State] public int $ticks = 0;
+        #[Effect] protected function timer(): \AML\Engine\EffectPlan { return Effects::interval(1000, ClientAction::increment('ticks')); }
+        #[Effect] protected function visibility(): \AML\Engine\EffectPlan { return Effects::onDocument('visibilitychange', ClientAction::increment('ticks')); }
+        public function body(): View { return Text(StateRef::to('ticks', $this->ticks)); }
+    };
+    $html = $renderer->render($component);
+    expect(str_contains($html, '&quot;mode&quot;:&quot;interval&quot;') && str_contains($html, 'visibilitychange'), 'Timer or listener effect failed.');
+});
+
+check('Modal, tabs and accordion expose accessible reactive contracts', function () use ($renderer): void {
+    $html = $renderer->render(Group(
+        Modal(StateRef::to('modalOpen', false), 'Profile', Text('Content')),
+        Tabs(StateRef::to('activeTab', 'Overview'), ['Overview' => Text('One'), 'Settings' => Text('Two')]),
+        Accordion(StateRef::to('expanded', ''), ['Details' => Text('Three')]),
+    ));
+    expect(str_contains($html, 'data-aml-modal') && str_contains($html, 'role="tablist"') && str_contains($html, 'data-aml-accordion-trigger'), 'Rich accessible components failed.');
+    expect(str_contains($html, 'aria-controls="aml-accordion-panel-') && str_contains($html, 'role="region"'), 'Accordion relationships are incomplete.');
+});
+
+check('Repeated tab groups keep globally unique ARIA identifiers', function () use ($renderer): void {
+    $html = $renderer->render(Group(
+        Tabs(StateRef::to('primaryTab', 'Overview'), ['Overview' => Text('One')]),
+        Tabs(StateRef::to('secondaryTab', 'Overview'), ['Overview' => Text('Two')]),
+    ));
+    preg_match_all('/ id="([^"]+)"/', $html, $matches);
+    expect(count($matches[1]) === count(array_unique($matches[1])), 'Two tab groups emitted duplicate identifiers.');
+    expect(substr_count($html, 'aria-labelledby="aml-tab-') === 2, 'Tab panels are not labelled by their tabs.');
+});
+
+check('DataTable, VirtualList and SortableEach declare collection behavior', function () use ($renderer): void {
+    $rows = StateRef::to('rows', [['id' => 1, 'name' => 'AML']]);
+    $html = $renderer->render(Group(
+        DataTable($rows, ['name' => 'Name']),
+        VirtualList($rows, static fn (\AML\View\CollectionItem $item): View => $item->text('name')),
+        SortableEach($rows, label: 'name'),
+    ));
+    expect(str_contains($html, 'data-aml-table-sort') && str_contains($html, 'data-aml-virtual-list') && str_contains($html, 'data-aml-sortable="true"'), 'Rich collection manifests failed.');
+    expect(str_contains($html, 'data-aml-virtual-key="1"') && str_contains($html, '>AML</span>'), 'VirtualList has no server-rendered initial window.');
+    expect(str_contains($html, 'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"'), 'Sortable collection has no keyboard contract.');
+});
+
+check('DynamicForm and AsyncBoundary compose existing primitives', function () use ($renderer): void {
+    $fields = StateRef::to('fields', [['id' => 1, 'name' => 'email']]);
+    $html = $renderer->render(Group(
+        DynamicForm($fields, static fn (\AML\View\CollectionItem $item): View => Input((string) $item->value('name', 'field'))),
+        AsyncBoundary(StateRef::to('status', 'loading'), Text('Ready'), Text('Loading'), Text('Error'), Text('Empty')),
+    ));
+    expect(str_contains($html, 'data-aml-dynamic-form="fields"') && str_contains($html, 'data-aml-when'), 'Dynamic form or async boundary failed.');
+});
+
+check('Accessible overlays and disclosure components declare complete contracts', function () use ($renderer): void {
+    $open = StateRef::to('open', false);
+    $html = $renderer->render(Group(
+        Toast($open, 'Saved', 'success', 2500),
+        Dropdown($open, 'Actions', MenuItem('Edit')),
+        Tooltip('More information', Text('Help')),
+        Popover($open, 'Details', Text('Content')),
+    ));
+    expect(str_contains($html, 'data-aml-toast') && str_contains($html, 'aria-live="polite"'), 'Toast accessibility contract is missing.');
+    expect(str_contains($html, 'role="menu"') && str_contains($html, 'role="menuitem"') && str_contains($html, 'aria-haspopup="menu"'), 'Dropdown accessibility contract is missing.');
+    expect(str_contains($html, 'role="tooltip"') && str_contains($html, 'aria-describedby='), 'Tooltip accessibility contract is missing.');
+    expect(str_contains($html, 'data-aml-popover') && str_contains($html, 'aria-haspopup="dialog"'), 'Popover accessibility contract is missing.');
+    $buttonTooltip = $renderer->render(Tooltip('Help', Button('Info')));
+    expect(substr_count($buttonTooltip, 'tabindex="0"') === 0 && str_contains($buttonTooltip, '<button') && str_contains($buttonTooltip, 'aria-describedby='), 'Interactive tooltip triggers must not create a second focus stop.');
+});
+
+check('ARIA identifiers stay unique after token normalization', function () use ($renderer): void {
+    $html = $renderer->render(Group(
+        Tabs(StateRef::to('tabCollision', 'a b'), ['a b' => Text('One'), 'a@b' => Text('Two')]),
+        Accordion(StateRef::to('accordionCollision', 'a b'), ['a b' => Text('One'), 'a@b' => Text('Two')]),
+    ));
+    preg_match_all('/ id="([^"]+)"/', $html, $matches);
+    expect(count($matches[1]) === count(array_unique($matches[1])), 'Normalized component keys emitted duplicate ARIA identifiers.');
+    if (class_exists(DOMDocument::class)) {
+        $document = new DOMDocument(); @$document->loadHTML('<!doctype html><html><body>' . $html . '</body></html>');
+        $xpath = new DOMXPath($document);
+        foreach (['aria-controls', 'aria-labelledby', 'aria-describedby'] as $attribute) {
+            foreach ($xpath->query('//*[@' . $attribute . ']') as $node) {
+                foreach (preg_split('/\s+/', trim($node->getAttribute($attribute))) ?: [] as $id) {
+                    expect($id !== '' && $document->getElementById($id) !== null, "Broken {$attribute} reference: {$id}");
+                }
+            }
         }
     }
 });
 
-echo "\n{$passed} passed, {$failed} failed.\n";
+check('Advanced forms support files, conditions, steps and draft preservation', function () use ($renderer): void {
+    $step = StateRef::to('step', 0);
+    $html = $renderer->render(MultiStepForm($step, [
+        'Profile' => Group(FileInput('avatar', ['image/*'], true), ConditionalField(StateRef::to('showBio', true), TextArea('bio'))),
+        'Confirm' => Text('Ready'),
+    ])->preserve('signup.draft'));
+    expect(str_contains($html, 'type="file"') && str_contains($html, 'accept="image/*"') && str_contains($html, 'multiple'), 'File input contract is incomplete.');
+    expect(str_contains($html, 'data-aml-when') && str_contains($html, 'data-aml-multi-step-form'), 'Conditional or multi-step form contract is missing.');
+    expect(str_contains($html, 'data-aml-form-preserve="signup.draft"'), 'Form draft preservation is missing.');
+    expect(str_contains($renderer->render(UploadForm(FileInput('document'))), 'enctype="multipart/form-data"'), 'Upload form encoding is missing.');
+    try {
+        FileInput('documents', files: StateRef::to('files', 'invalid'));
+        throw new RuntimeException('A file input accepted a non-array state.');
+    } catch (InvalidArgumentException) {
+    }
+});
+
+check('Context providers render nested server values and client manifests', function () use ($renderer): void {
+    $html = $renderer->render(ContextProvider('locale', 'fr', Group(
+        ContextText('locale'),
+        ContextProvider('locale', 'en', ContextText('locale'), true),
+    )));
+    expect(substr_count($html, 'data-aml-context-provider=') === 2, 'Context provider manifests are missing.');
+    expect(str_contains($html, '>fr</span>') && str_contains($html, '>en</span>'), 'Nested context values were not rendered on the server.');
+    expect(substr_count($html, 'style="display:contents"') === 2, 'Context providers must not alter page layout.');
+});
+
+check('Navigation actions, redirects and boundaries are declarative', function () use ($renderer): void {
+    $action = Navigate('/account?tab=profile', replace: true)->json();
+    $html = $renderer->render(NavigationBoundary(
+        Button('Account')->onClick(Navigate('/account')),
+        Text('Loading'), Text('Failed'), Text('Missing'),
+    ));
+    expect(str_contains($action, '"type":"navigate"') && str_contains($action, '"replace":true'), 'Navigation action is incomplete.');
+    expect(str_contains($html, 'data-aml-navigation-boundary') && str_contains($html, 'data-aml-navigation-state="not-found"'), 'Navigation boundary is incomplete.');
+    expect(str_contains($renderer->render(Redirect('/login')), 'data-aml-redirect'), 'Declarative redirect is missing.');
+    try {
+        Navigate('javascript:alert(1)');
+        throw new RuntimeException('Dangerous navigation scheme was accepted.');
+    } catch (InvalidArgumentException) {
+    }
+});
+
+check('Router exposes query parameters to route factories', function () use ($renderer): void {
+    $router = (new Router())->get('/search', static fn (array $params, array $query): View => Text((string) ($query['q'] ?? '')));
+    expect($renderer->render(RouterView($router, '/search?q=AML')) === '<span>AML</span>', 'Router query parameters are unavailable.');
+});
+
+check('FileApplication discovers pages and returns PageResult', function (): void {
+    $root = sys_get_temp_dir() . '/aml-view-files-' . bin2hex(random_bytes(5));
+    mkdir($root . '/pages/home', 0777, true);
+    mkdir($root . '/components', 0777, true);
+    mkdir($root . '/states', 0777, true);
+    file_put_contents($root . '/components/Badge.php', <<<'PHP'
+<?php
+namespace App\Views\Components;
+final class Badge extends \AML\View\Component {
+    public function body(): \AML\View\View { return \AML\View\Text('Factory badge'); }
+}
+function Badge(): Badge { return new Badge(); }
+PHP);
+    file_put_contents($root . '/pages/home/page.php', <<<'PHP'
+<?php
+namespace App\Views\Pages\Home;
+final class HomePage extends \AML\View\Page {
+    public function body(): \AML\View\View { return \AML\View\Group(\AML\View\Heading('Home'), \App\Views\Components\Badge(), \AML\View\Text((string) $this->query('tab', 'none'))); }
+}
+PHP);
+    file_put_contents($root . '/states/Loading.php', <<<'PHP'
+<?php
+namespace App\Views\States;
+final class LoadingPage extends \AML\View\Page {
+    public function body(): \AML\View\View { throw new \RuntimeException('lazy-state-loaded'); }
+}
+PHP);
+    $result = (new FileApplication($root))->mount('/?tab=docs');
+    expect(str_contains($result->rootHtml(), 'data-aml-root') && str_contains($result->html(), 'Home') && str_contains($result->html(), 'Factory badge') && str_contains($result->html(), 'docs'), 'Initial page result, component factory, or query parsing failed.');
+    $_SERVER['HTTP_X_AML_NAVIGATION_STATE'] = 'loading';
+    try {
+        (new FileApplication($root))->mount('/');
+        throw new RuntimeException('Lazy loading state was not constructed on demand.');
+    } catch (RuntimeException $error) {
+        expect($error->getMessage() === 'lazy-state-loaded', 'The route state endpoint did not load the requested state.');
+    } finally {
+        unset($_SERVER['HTTP_X_AML_NAVIGATION_STATE']);
+    }
+});
+
+check('ViewTest renders, finds and simulates local interactions', function (): void {
+    $component = new ViewTestingFixturePage();
+    ViewTest::render($component)
+        ->assertSee('Testing')->assertComponent('TestHeading')->assertState('count', 0)
+        ->click('Add')->assertState('count', 1)->assertSee('1')
+        ->click('Conditional')->assertState('count', 9)
+        ->click('Append')->assertState('items', [1, 2])
+        ->fill('name', 'AML')->assertState('name', 'AML')
+        ->click('Account')->assertRedirect('/account', true);
+});
+
+check('ViewTest reports failed expectations and exceptions', function (): void {
+    ViewTest::assertThrows(static fn () => ViewTest::render(Text('Ready'))->assertSee('Missing'), TestExpectationFailed::class, 'not found');
+    ViewTest::assertThrows(static fn () => throw new InvalidArgumentException('invalid fixture'), InvalidArgumentException::class, 'fixture');
+});
+
+check('ViewTest resolves isolated component state by an unambiguous suffix', function (): void {
+    $component = new class extends Component {
+        #[State] public int $count = 2;
+        public function body(): View { return Text(StateRef::to('count', 2)); }
+    };
+    ViewTest::render($component)->assertState('count', 2)->assertSee('2');
+});
+
+printf("\n%d passed, %d failed.\n", $passed, $failed);
 exit($failed === 0 ? 0 : 1);

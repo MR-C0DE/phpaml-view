@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace AML\View;
 
-use Closure;
+use AML\Engine\ClientAction;
+use AML\Engine\ClientInstruction;
+use AML\Engine\ApiAction;
+use AML\Engine\StateRef;
+use AML\Engine\StateNamespace;
 
 class Element implements View
 {
@@ -17,11 +21,23 @@ class Element implements View
     /** @var array<string, string> */
     private array $styles = [];
 
-    /** @var array<string, Closure> */
-    private array $events = [];
+    /** @var array<string, ClientInstruction> */
+    private array $clientEvents = [];
 
-    /** @var array{component: Component, property: string}|null */
-    private ?array $binding = null;
+    /** @var list<array{state: string, class: string, equals: mixed}> */
+    private array $reactiveClasses = [];
+
+    /** @var array{state: string, equals: mixed}|null */
+    private ?array $visibilityRule = null;
+
+    /** @var array{state: string, equals: mixed}|null */
+    private ?array $disabledRule = null;
+
+    /** @var list<array{type: string, value?: int, message: string}> */
+    private array $validationRules = [];
+
+    /** @var array{request: array<string, mixed>, debounce: int, message: string}|null */
+    private ?array $remoteValidation = null;
 
     public function __construct(private string $tag, View ...$children)
     {
@@ -35,6 +51,19 @@ class Element implements View
         }
 
         $this->attributes[$name] = $value;
+        return $this;
+    }
+
+    public function class(string ...$names): static
+    {
+        $classes = preg_split('/\s+/', trim((string) ($this->attributes['class'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        foreach ($names as $name) {
+            if ($name === '' || preg_match('/\s/', $name) === 1) {
+                throw new \InvalidArgumentException('A class name must be a non-empty HTML token.');
+            }
+            $classes[] = $name;
+        }
+        $this->attributes['class'] = implode(' ', array_values(array_unique($classes)));
         return $this;
     }
 
@@ -95,96 +124,129 @@ class Element implements View
         return $this->attribute('data-aml-loading-label', $label);
     }
 
-    public function event(string $name, Closure $handler): static
+    public function nativeNavigation(bool $enabled = true): static
     {
-        $this->events[$name] = $handler;
+        return $this->attribute('data-aml-native-navigation', $enabled ? 'true' : null);
+    }
+
+    public function preserve(string $key): static
+    {
+        if (preg_match('/^[a-zA-Z0-9_.-]{1,120}$/', $key) !== 1) {
+            throw new \InvalidArgumentException('A preserved form key must contain only letters, numbers, dots, dashes, or underscores.');
+        }
+        return $this->attribute('data-aml-form-preserve', $key);
+    }
+
+    public function transition(string $name = 'fade', int $milliseconds = 180): static
+    {
+        if (!in_array($name, ['fade', 'slide', 'scale'], true)) {
+            throw new \InvalidArgumentException("Unsupported AML transition: {$name}");
+        }
+        if ($milliseconds < 0 || $milliseconds > 10_000) {
+            throw new \InvalidArgumentException('Transition duration must be between 0 and 10000 milliseconds.');
+        }
+        return $this->attribute('data-aml-transition', $name)
+            ->attribute('data-aml-transition-duration', $milliseconds);
+    }
+
+    public function component(string $name): static
+    {
+        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_.-]*$/', $name)) {
+            throw new \InvalidArgumentException("Invalid AML component name: {$name}");
+        }
+        return $this->attribute('data-aml-component', $name);
+    }
+
+    public function showWhen(string|StateRef $state, mixed $equals = true): static
+    {
+        [$name, $initial] = self::reactiveState($state);
+        $this->visibilityRule = ['state' => $name, 'equals' => $equals];
+        if ($state instanceof StateRef) $this->attribute('hidden', $initial !== $equals);
         return $this;
     }
 
-    public function click(Closure $handler): static
+    public function classWhen(string|StateRef $state, string $class, mixed $equals = true): static
     {
-        return $this->event('click', $handler);
-    }
-
-    public function onClick(Closure $handler): static
-    {
-        return $this->click($handler);
-    }
-
-    public function onSubmit(Closure $handler): static
-    {
-        return $this->event('submit', $handler);
-    }
-
-    public function onInput(Closure $handler): static
-    {
-        return $this->event('input', $handler);
-    }
-
-    public function onChange(Closure $handler): static
-    {
-        return $this->event('change', $handler);
-    }
-
-    public function bind(Component $component, string $property): static
-    {
-        $reflection = new \ReflectionProperty($component, $property);
-        if ($reflection->getAttributes(State::class) === []) {
-            throw new \LogicException("Bound property {$property} must use #[State].");
+        if ($class === '' || preg_match('/\s/', $class) === 1) {
+            throw new \InvalidArgumentException('A reactive class must be a non-empty HTML token.');
         }
-        if ($reflection->isStatic()) {
-            throw new \LogicException("Bound property {$property} cannot be static.");
-        }
+        [$name, $initial] = self::reactiveState($state);
+        $this->reactiveClasses[] = ['state' => $name, 'class' => $class, 'equals' => $equals];
+        if ($state instanceof StateRef && $initial === $equals) $this->class($class);
+        return $this;
+    }
 
-        $this->binding = ['component' => $component, 'property' => $property];
+    public function disabledWhen(string|StateRef $state, mixed $equals = true): static
+    {
+        [$name, $initial] = self::reactiveState($state);
+        $this->disabledRule = ['state' => $name, 'equals' => $equals];
+        if ($state instanceof StateRef) $this->disabled($initial === $equals);
+        return $this;
+    }
+
+    public function click(ClientInstruction $handler): static
+    {
+        return $this->onClick($handler);
+    }
+
+    public function onClick(ClientInstruction $handler): static
+    {
+        $this->clientEvents['click'] = $handler;
+        return $this;
+    }
+
+    public function updates(string $property, int|float $by = 1): static
+    {
+        return $this->onClick(ClientAction::increment($property, $by));
+    }
+
+    public function bindClient(string $property): static
+    {
+        $property = StateNamespace::qualify($property);
+        return $this
+            ->attribute('data-aml-model', $property)
+            ->attribute('data-aml-bind', $property);
+    }
+
+    public function required(string $message = 'This field is required.'): static
+    {
+        $this->validationRules[] = ['type' => 'required', 'message' => $message];
+        return $this->attribute('required', true);
+    }
+
+    public function minLength(int $length, ?string $message = null): static
+    {
+        if ($length < 0) throw new \InvalidArgumentException('Minimum length cannot be negative.');
+        $this->validationRules[] = [
+            'type' => 'min-length',
+            'value' => $length,
+            'message' => $message ?? "Use at least {$length} characters.",
+        ];
+        return $this->attribute('minlength', $length);
+    }
+
+    public function email(string $message = 'Enter a valid email address.'): static
+    {
+        $this->validationRules[] = ['type' => 'email', 'message' => $message];
+        return $this->attribute('inputmode', 'email');
+    }
+
+    public function validateWith(
+        ApiAction $request,
+        int $debounce = 400,
+        string $message = 'This value is not available.',
+    ): static {
+        if ($debounce < 0 || $debounce > 10000) {
+            throw new \InvalidArgumentException('Validation debounce must be between 0 and 10000 milliseconds.');
+        }
+        $decoded = json_decode($request->json(), true, 512, JSON_THROW_ON_ERROR);
+        $this->remoteValidation = ['request' => $decoded, 'debounce' => $debounce, 'message' => $message];
         return $this;
     }
 
     public function render(RenderContext $context): string
     {
         $attributes = $this->attributes;
-        if ($this->binding !== null) {
-            $component = $this->binding['component'];
-            $property = new \ReflectionProperty($component, $this->binding['property']);
-            $value = $property->getValue($component);
-            if (($attributes['type'] ?? null) === 'checkbox') {
-                $attributes['checked'] = (bool) $value;
-            } else {
-                $attributes['value'] = is_scalar($value) || $value === null ? $value : '';
-                $attributes['data-aml-value'] = is_scalar($value) || $value === null ? $value : '';
-            }
-            $this->events['change'] = static function (array $data) use ($component, $property): void {
-                $raw = self::convertValue($property, $data['value'] ?? null);
-                if ($component->validateProperty($property->getName(), $raw)) {
-                    $property->setValue($component, $raw);
-                }
-            };
-            $error = $component->validationError($property->getName());
-            if ($error !== null) {
-                $attributes['aria-invalid'] = 'true';
-                $attributes['aria-describedby'] = 'aml-error-' . $property->getName();
-            }
-        }
-
-        if ($this->tag === 'form' && isset($this->events['submit'])) {
-            $handler = $this->events['submit'];
-            $bindings = $this->collectBindings();
-            $this->events['submit'] = static function (array $data) use ($handler, $bindings): void {
-                $valid = true;
-                foreach ($bindings as $name => [$component, $property, $checkbox]) {
-                    $raw = self::convertValue($property, $checkbox ? ($data[$name] ?? false) : ($data[$name] ?? null));
-                    if (!$component->validateProperty($property->getName(), $raw)) {
-                        $valid = false;
-                        continue;
-                    }
-                    $property->setValue($component, $raw);
-                }
-                if ($valid) {
-                    $reflection = new \ReflectionFunction($handler);
-                    $reflection->getNumberOfParameters() === 0 ? $handler() : $handler($data);
-                }
-            };
-        }
         if ($this->styles !== []) {
             $attributes['style'] = implode(';', array_map(
                 static fn (string $name, string $value): string => "{$name}:{$value}",
@@ -193,8 +255,26 @@ class Element implements View
             ));
         }
 
-        foreach ($this->events as $name => $handler) {
-            $attributes['data-aml-' . $name] = $context->registerEvent($handler);
+        foreach ($this->clientEvents as $name => $action) {
+            $attributes['data-aml-client-' . $name] = $action->json();
+        }
+        if ($this->visibilityRule !== null) {
+            $attributes['data-aml-show-when'] = json_encode($this->visibilityRule, JSON_THROW_ON_ERROR);
+        }
+        if ($this->reactiveClasses !== []) {
+            $attributes['data-aml-class-when'] = json_encode($this->reactiveClasses, JSON_THROW_ON_ERROR);
+        }
+        if ($this->disabledRule !== null) {
+            $attributes['data-aml-disabled-when'] = json_encode($this->disabledRule, JSON_THROW_ON_ERROR);
+        }
+        if ($this->validationRules !== []) {
+            $attributes['data-aml-validate'] = json_encode($this->validationRules, JSON_THROW_ON_ERROR);
+        }
+        if ($this->remoteValidation !== null) {
+            $attributes['data-aml-validate-api'] = json_encode(
+                $this->remoteValidation,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+            );
         }
 
         $htmlAttributes = '';
@@ -218,49 +298,13 @@ class Element implements View
         if (in_array($this->tag, ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'], true)) {
             $html = preg_replace('#></' . preg_quote($this->tag, '#') . '>$#', '>', $html) ?? $html;
         }
-        if ($this->binding !== null) {
-            $property = $this->binding['property'];
-            $error = $this->binding['component']->validationError($property);
-            if ($error !== null) {
-                $message = htmlspecialchars($error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-                return '<div data-aml-field>' . $html . '<small id="aml-error-' . htmlspecialchars($property, ENT_QUOTES, 'UTF-8') . '" role="alert">' . $message . '</small></div>';
-            }
-        }
         return $html;
     }
 
-    /** @return array<string, array{Component, \ReflectionProperty, bool}> */
-    private function collectBindings(): array
+    /** @return array{string, mixed} */
+    private static function reactiveState(string|StateRef $state): array
     {
-        $bindings = [];
-        if ($this->binding !== null) {
-            $name = $this->attributes['name'] ?? $this->binding['property'];
-            $bindings[(string) $name] = [
-                $this->binding['component'],
-                new \ReflectionProperty($this->binding['component'], $this->binding['property']),
-                ($this->attributes['type'] ?? null) === 'checkbox',
-            ];
-        }
-        foreach ($this->children as $child) {
-            if ($child instanceof self) {
-                $bindings += $child->collectBindings();
-            }
-        }
-        return $bindings;
-    }
-
-    private static function convertValue(\ReflectionProperty $property, mixed $raw): mixed
-    {
-        $type = $property->getType();
-        if (!$type instanceof \ReflectionNamedType) {
-            return $raw;
-        }
-        return match ($type->getName()) {
-            'bool' => filter_var($raw, FILTER_VALIDATE_BOOL),
-            'int' => (int) $raw,
-            'float' => (float) $raw,
-            'string' => (string) $raw,
-            default => $raw,
-        };
+        $name = $state instanceof StateRef ? $state->name : StateNamespace::qualify($state);
+        return [$name, $state instanceof StateRef ? $state->initial : null];
     }
 }

@@ -22,6 +22,8 @@ final class Router
     /** @return array{View, ?Layout} */
     public function resolve(string $path): array
     {
+        $query = [];
+        parse_str((string) (parse_url($path, PHP_URL_QUERY) ?? ''), $query);
         $path = parse_url($path, PHP_URL_PATH) ?: '/';
         $path = $path === '/' ? '/' : rtrim($path, '/');
         foreach ($this->routes as $route) {
@@ -43,7 +45,10 @@ final class Router
             foreach ($names as $index => $name) {
                 $params[$name] = rawurldecode($matches[$index] ?? '');
             }
-            $page = ($route['page'])($params);
+            $reflection = new \ReflectionFunction($route['page']);
+            $page = $reflection->getNumberOfParameters() >= 2
+                ? ($route['page'])($params, $query)
+                : ($route['page'])($params);
             $layout = $route['layout'] === null ? null : ($route['layout'])();
             if (!$page instanceof View || ($layout !== null && !$layout instanceof Layout)) {
                 throw new \UnexpectedValueException('AML View routes must return a View and an optional Layout.');

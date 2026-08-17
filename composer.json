@@ -1,16 +1,17 @@
 {
   "name": "phpaml/view",
-  "description": "Declarative, server-first web interfaces for PHPAML.",
+  "description": "Declarative frontend interfaces for PHPAML, authored in PHP.",
   "type": "library",
   "license": "MIT",
-  "keywords": ["phpaml", "server-driven-ui", "declarative-ui", "mvc"],
+  "keywords": ["phpaml", "frontend", "declarative-ui", "mvc"],
   "homepage": "https://phpaml.com",
   "support": {
     "issues": "https://github.com/MR-C0DE/phpaml-view/issues",
     "source": "https://github.com/MR-C0DE/phpaml-view"
   },
   "require": {
-    "php": "^8.2"
+    "php": "^8.2",
+    "phpaml/engine": "^0.1@beta"
   },
   "autoload": {
     "psr-4": {
@@ -23,13 +24,16 @@
   "scripts": {
     "test": [
       "php tests/run.php",
-      "php tests/demo.php"
-    ]
+      "php tests/integration.php",
+      "php tests/demo-app.php"
+    ],
+    "test:integration": "php tests/integration.php",
+    "test:demo": "php tests/demo-app.php"
   },
   "extra": {
     "phpaml": {
       "type": "view-library",
-      "version": "0.1.0-beta.1"
+      "version": "0.1.0-beta.3"
     }
   }
 }
