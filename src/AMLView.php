@@ -6,7 +6,7 @@ namespace AML\View;
 
 final class AMLView
 {
-    public const VERSION = '0.1.0-beta.4';
+    public const VERSION = '0.1.0-beta.5';
 
     private function __construct()
     {

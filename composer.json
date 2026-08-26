@@ -33,7 +33,7 @@
   "extra": {
     "phpaml": {
       "type": "view-library",
-      "version": "0.1.0-beta.4"
+      "version": "0.1.0-beta.5"
     }
   }
 }

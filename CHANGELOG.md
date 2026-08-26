@@ -2,6 +2,11 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.5
+
+- Document the complete Composer command for prerelease projects so the root
+  package explicitly opts into both View and Engine beta versions.
+
 ## 0.1.0-beta.4
 
 - Make a direct Packagist installation resolve PHPAML Engine beta 3 without
