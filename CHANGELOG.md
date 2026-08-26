@@ -2,6 +2,11 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.4
+
+- Make a direct Packagist installation resolve PHPAML Engine beta 3 without
+  requiring applications to add a separate root stability flag.
+
 ## 0.1.0-beta.3
 
 - Add declarative `#[Effect]` methods with dependencies, mount control and debounce.

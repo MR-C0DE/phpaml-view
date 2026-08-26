@@ -106,7 +106,7 @@ function expect(bool $condition, string $message): void
 $renderer = new Renderer();
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.3', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.4', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',

@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.3`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.4`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
