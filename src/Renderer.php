@@ -10,8 +10,7 @@ final class Renderer
 {
     public function render(View $view): string
     {
-        StateNamespace::reset();
-        return $view->render(new RenderContext());
+        return $this->isolated(static fn (): string => $view->render(new RenderContext()));
     }
 
     public function renderPage(Page $page, ?Layout $layout = null): string
@@ -20,6 +19,15 @@ final class Renderer
             return $this->render($page);
         }
 
-        return $layout->render((new RenderContext())->withContent($page));
+        return $this->isolated(static fn (): string => $layout->render((new RenderContext())->withContent($page)));
+    }
+
+    private function isolated(callable $render): string
+    {
+        if (method_exists(StateNamespace::class, 'isolated')) {
+            return StateNamespace::isolated($render);
+        }
+        StateNamespace::reset();
+        return $render();
     }
 }
