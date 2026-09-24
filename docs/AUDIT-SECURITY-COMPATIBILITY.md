@@ -47,6 +47,7 @@ Audit date: 2026-08-17
 ## Compatibility
 
 - PHP requirement: PHP 8.2 or newer.
+- AML View `0.1.0-beta.5` is validated with PHPAML Engine `0.1.0-beta.3`.
 - The engine requires standard modern browser features including modules of the
   DOM, `fetch`, `AbortController`, `MutationObserver`, Web Storage and optional
   IndexedDB for states that explicitly select it.
@@ -55,8 +56,9 @@ Audit date: 2026-08-17
 
 ## Validation result
 
-- AML View unit suite: 32 passed, 0 failed.
-- PHPAML Engine suite: 45 passed, 0 failed.
+- AML View unit suite: 46 passed, 0 failed.
+- AML View integration suite: 4 passed, 0 failed.
+- PHPAML Engine unit suite: 18 passed, 0 failed.
 - CLI AML View smoke suite: passed.
 - Browser scenarios: nested transactions, rich collections, isolated roots,
   history restoration, IndexedDB migrations, corrupt storage and cross-tab sync passed.
