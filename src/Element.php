@@ -49,6 +49,9 @@ class Element implements View
         if (!preg_match('/^[a-zA-Z_:][a-zA-Z0-9_.:-]*$/', $name)) {
             throw new \InvalidArgumentException("Invalid HTML attribute: {$name}");
         }
+        if (preg_match('/^on/i', $name) === 1 || strtolower($name) === 'style') {
+            throw new \InvalidArgumentException("Unsafe HTML attribute: {$name}");
+        }
 
         $this->attributes[$name] = $value;
         return $this;
@@ -73,7 +76,11 @@ class Element implements View
             throw new \InvalidArgumentException("Invalid CSS property: {$name}");
         }
 
-        $this->styles[$name] = (string) $value;
+        $value = (string) $value;
+        if (preg_match('/[;{}<>\x00-\x1F\x7F]/', $value) === 1) {
+            throw new \InvalidArgumentException("Unsafe CSS value for {$name}.");
+        }
+        $this->styles[$name] = $value;
         return $this;
     }
 
@@ -92,6 +99,19 @@ class Element implements View
         return $this->spacing($pixels);
     }
 
+    public function alignment(string $alignment): static
+    {
+        $value = match (strtolower($alignment)) {
+            'leading', 'start', 'top' => 'flex-start',
+            'center' => 'center',
+            'trailing', 'end', 'bottom' => 'flex-end',
+            'stretch' => 'stretch',
+            default => throw new \InvalidArgumentException("Unknown alignment: {$alignment}"),
+        };
+
+        return $this->style('align-items', $value);
+    }
+
     public function center(): static
     {
         return $this
@@ -104,14 +124,277 @@ class Element implements View
         return $this->attribute('disabled', $disabled)->attribute('aria-disabled', $disabled ? 'true' : null);
     }
 
+    public function id(string $id): static
+    {
+        if ($id === '' || preg_match('/\s/', $id) === 1) {
+            throw new \InvalidArgumentException('An HTML id must be a non-empty token.');
+        }
+        return $this->attribute('id', $id);
+    }
+
+    public function placeholder(string $text): static
+    {
+        return $this->attribute('placeholder', $text);
+    }
+
+    public function autocomplete(string $value): static
+    {
+        if (trim($value) === '') throw new \InvalidArgumentException('Autocomplete cannot be empty.');
+        return $this->attribute('autocomplete', $value);
+    }
+
+    public function maxLength(int $length): static
+    {
+        if ($length < 0) throw new \InvalidArgumentException('Maximum length cannot be negative.');
+        return $this->attribute('maxlength', $length);
+    }
+
+    public function rows(int $rows): static
+    {
+        if ($rows < 1) throw new \InvalidArgumentException('Textarea rows must be positive.');
+        return $this->attribute('rows', $rows);
+    }
+
+    public function columns(int $columns): static
+    {
+        if ($columns < 1) throw new \InvalidArgumentException('Textarea columns must be positive.');
+        return $this->attribute('cols', $columns);
+    }
+
+    public function min(int|float|string $value): static
+    {
+        return $this->attribute('min', $value);
+    }
+
+    public function max(int|float|string $value): static
+    {
+        return $this->attribute('max', $value);
+    }
+
+    public function step(int|float|string $value): static
+    {
+        if ($value === '' || (is_numeric($value) && (float) $value <= 0)) {
+            throw new \InvalidArgumentException('Input step must be positive or "any".');
+        }
+        if (!is_numeric($value) && strtolower((string) $value) !== 'any') {
+            throw new \InvalidArgumentException('Input step must be positive or "any".');
+        }
+        return $this->attribute('step', $value);
+    }
+
+    public function readOnly(bool $enabled = true): static
+    {
+        return $this->attribute('readonly', $enabled);
+    }
+
+    public function multiple(bool $enabled = true): static
+    {
+        return $this->attribute('multiple', $enabled);
+    }
+
+    public function scope(string $scope): static
+    {
+        $scope = strtolower($scope);
+        if (!in_array($scope, ['row', 'col', 'rowgroup', 'colgroup'], true)) {
+            throw new \InvalidArgumentException("Unknown table header scope: {$scope}");
+        }
+        return $this->attribute('scope', $scope);
+    }
+
+    public function colSpan(int $columns): static
+    {
+        if ($columns < 1 || $columns > 1000) {
+            throw new \InvalidArgumentException('Table column span must be between 1 and 1000.');
+        }
+        return $this->attribute('colspan', $columns);
+    }
+
+    public function rowSpan(int $rows): static
+    {
+        if ($rows < 1 || $rows > 65534) {
+            throw new \InvalidArgumentException('Table row span must be between 1 and 65534.');
+        }
+        return $this->attribute('rowspan', $rows);
+    }
+
+    public function target(string $target): static
+    {
+        if ($target === '' || preg_match('/\s/', $target) === 1) {
+            throw new \InvalidArgumentException('A link target must be a non-empty token.');
+        }
+        $this->attribute('target', $target);
+        if (strtolower($target) === '_blank') {
+            $this->rel('noopener', 'noreferrer');
+        }
+        return $this;
+    }
+
+    public function rel(string ...$relationships): static
+    {
+        $tokens = preg_split('/\s+/', trim((string) ($this->attributes['rel'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        foreach ($relationships as $relationship) {
+            foreach (preg_split('/\s+/', trim($relationship), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+                if (preg_match('/^[a-zA-Z][a-zA-Z0-9-]*$/', $token) !== 1) {
+                    throw new \InvalidArgumentException("Invalid link relationship: {$token}");
+                }
+                $tokens[] = strtolower($token);
+            }
+        }
+        if ($tokens === []) throw new \InvalidArgumentException('A link relationship cannot be empty.');
+        return $this->attribute('rel', implode(' ', array_values(array_unique($tokens))));
+    }
+
+    public function language(string $language): static
+    {
+        if (preg_match('/^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/', $language) !== 1) {
+            throw new \InvalidArgumentException("Invalid language tag: {$language}");
+        }
+        return $this->attribute('hreflang', $language);
+    }
+
+    public function referrerPolicy(string $policy): static
+    {
+        $policy = strtolower($policy);
+        if (!in_array($policy, [
+            'no-referrer', 'no-referrer-when-downgrade', 'origin', 'origin-when-cross-origin',
+            'same-origin', 'strict-origin', 'strict-origin-when-cross-origin', 'unsafe-url',
+        ], true)) {
+            throw new \InvalidArgumentException("Unknown referrer policy: {$policy}");
+        }
+        return $this->attribute('referrerpolicy', $policy);
+    }
+
+    public function download(?string $filename = null): static
+    {
+        return $this->attribute('download', $filename ?? true);
+    }
+
+    public function loading(string $mode): static
+    {
+        $mode = strtolower($mode);
+        if (!in_array($mode, ['eager', 'lazy'], true)) {
+            throw new \InvalidArgumentException("Unknown loading mode: {$mode}");
+        }
+        return $this->attribute('loading', $mode);
+    }
+
+    public function allowFullScreen(bool $enabled = true): static
+    {
+        return $this->attribute('allowfullscreen', $enabled);
+    }
+
+    public function fontSize(int|float $pixels): static
+    {
+        if ($pixels <= 0 || $pixels > 1000) {
+            throw new \InvalidArgumentException('Font size must be between 0 and 1000 pixels.');
+        }
+        return $this->style('font-size', $pixels . 'px');
+    }
+
+    public function fontWeight(string|int $weight): static
+    {
+        $value = strtolower((string) $weight);
+        if (!in_array($value, ['normal', 'bold', 'bolder', 'lighter'], true)
+            && !(ctype_digit($value) && (int) $value >= 100 && (int) $value <= 900 && (int) $value % 100 === 0)) {
+            throw new \InvalidArgumentException("Unknown font weight: {$value}");
+        }
+        return $this->style('font-weight', $value);
+    }
+
+    public function lineHeight(int|float $height): static
+    {
+        if ($height <= 0 || $height > 20) {
+            throw new \InvalidArgumentException('Line height must be between 0 and 20.');
+        }
+        return $this->style('line-height', $height);
+    }
+
+    public function letterSpacing(int|float $pixels): static
+    {
+        if ($pixels < -100 || $pixels > 100) {
+            throw new \InvalidArgumentException('Letter spacing must be between -100 and 100 pixels.');
+        }
+        return $this->style('letter-spacing', $pixels . 'px');
+    }
+
+    public function textAlign(string $alignment): static
+    {
+        $alignment = strtolower($alignment);
+        if (!in_array($alignment, ['start', 'end', 'left', 'right', 'center', 'justify'], true)) {
+            throw new \InvalidArgumentException("Unknown text alignment: {$alignment}");
+        }
+        return $this->style('text-align', $alignment);
+    }
+
+    public function textColor(string $color): static
+    {
+        if ($color === '' || preg_match('/[;{}<>\x00-\x1F\x7F]/', $color) === 1) {
+            throw new \InvalidArgumentException('Invalid text color.');
+        }
+        return $this->style('color', $color);
+    }
+
+    public function cite(string $source): static
+    {
+        return $this->attribute('cite', safeLinkHref($source));
+    }
+
+    public function open(bool $enabled = true): static
+    {
+        return $this->attribute('open', $enabled);
+    }
+
+    public function controls(bool $enabled = true): static
+    {
+        return $this->attribute('controls', $enabled);
+    }
+
+    public function autoplay(bool $enabled = true): static
+    {
+        return $this->attribute('autoplay', $enabled);
+    }
+
+    public function muted(bool $enabled = true): static
+    {
+        return $this->attribute('muted', $enabled);
+    }
+
+    public function loop(bool $enabled = true): static
+    {
+        return $this->attribute('loop', $enabled);
+    }
+
+    public function playsInline(bool $enabled = true): static
+    {
+        return $this->attribute('playsinline', $enabled);
+    }
+
+    public function poster(string $source): static
+    {
+        return $this->attribute('poster', $source);
+    }
+
+    public function preload(string $mode): static
+    {
+        $mode = strtolower($mode);
+        if (!in_array($mode, ['none', 'metadata', 'auto'], true)) {
+            throw new \InvalidArgumentException("Unknown media preload mode: {$mode}");
+        }
+
+        return $this->attribute('preload', $mode);
+    }
+
     public function status(ActionStatus $status, ?string $message = null): static
     {
         $this->attribute('data-aml-status', $status->value);
         if ($status === ActionStatus::Loading) {
             $this->disabled()->attribute('aria-busy', 'true');
         }
-        if ($status === ActionStatus::Success || $status === ActionStatus::Error) {
+        if (in_array($status, [ActionStatus::Success, ActionStatus::Info], true)) {
             $this->attribute('aria-live', 'polite');
+        }
+        if (in_array($status, [ActionStatus::Error, ActionStatus::Warning], true)) {
+            $this->attribute('aria-live', 'assertive');
         }
         if ($message !== null) {
             $this->children = [textValue($message)];

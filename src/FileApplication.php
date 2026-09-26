@@ -51,9 +51,9 @@ final class FileApplication
         return (new $definition['page']())->configureRoute($parameters, null, $this->queryFrom($path))->metadata();
     }
 
-    public function head(string $path): string
+    public function head(string $path, ?string $nonce = null): string
     {
-        return $this->metadata($path)->render();
+        return $this->metadata($path)->render($nonce);
     }
 
     /** @return list<string> */

@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use AML\View\Console;
+use AML\View\Alert;
+
 require __DIR__ . '/bootstrap.php';
 
 use AML\Engine\Actions;
@@ -30,6 +33,7 @@ use function AML\View\Button;
 use function AML\View\Each;
 use function AML\View\Group;
 use function AML\View\Heading;
+use function AML\View\HStack;
 use function AML\View\Input;
 use function AML\View\Link;
 use function AML\View\Slot;
@@ -39,6 +43,8 @@ use function AML\View\ThemeSwitcher;
 use function AML\View\VStack;
 use function AML\View\When;
 use function AML\View\Accordion;
+use function AML\View\Article;
+use function AML\View\Aside;
 use function AML\View\AsyncBoundary;
 use function AML\View\DataTable;
 use function AML\View\DynamicForm;
@@ -50,11 +56,87 @@ use function AML\View\Toast;
 use function AML\View\Dropdown;
 use function AML\View\MenuItem;
 use function AML\View\Tooltip;
+use function AML\View\Main;
+use function AML\View\Paragraph;
+use function AML\View\Strong;
+use function AML\View\Emphasis;
+use function AML\View\UnorderedList;
+use function AML\View\ListItem;
+use function AML\View\Audio;
+use function AML\View\Figure;
+use function AML\View\FigCaption;
+use function AML\View\Image;
+use function AML\View\Picture;
+use function AML\View\Source;
+use function AML\View\Track;
+use function AML\View\Video;
+use function AML\View\Datalist;
+use function AML\View\DateInput;
+use function AML\View\EmailInput;
+use function AML\View\Fieldset;
+use function AML\View\Form;
+use function AML\View\HiddenInput;
+use function AML\View\Label;
+use function AML\View\Legend;
+use function AML\View\Meter;
+use function AML\View\NumberInput;
+use function AML\View\Option;
+use function AML\View\Output;
+use function AML\View\PasswordInput;
+use function AML\View\Progress;
+use function AML\View\RadioInput;
+use function AML\View\SearchInput;
+use function AML\View\TextArea;
+use function AML\View\Caption;
+use function AML\View\ColumnGroup;
+use function AML\View\Table;
+use function AML\View\TableBody;
+use function AML\View\TableCell;
+use function AML\View\TableColumn;
+use function AML\View\TableFoot;
+use function AML\View\TableHead;
+use function AML\View\TableHeader;
+use function AML\View\TableRow;
+use function AML\View\Area;
+use function AML\View\Canvas;
+use function AML\View\DownloadLink;
+use function AML\View\EmailLink;
+use function AML\View\Embed;
+use function AML\View\ExternalLink;
+use function AML\View\Iframe;
+use function AML\View\ImageMap;
+use function AML\View\ObjectMedia;
+use function AML\View\PhoneLink;
+use function AML\View\Abbreviation;
+use function AML\View\Address;
+use function AML\View\BlockQuote;
+use function AML\View\CodeBlock;
+use function AML\View\DeletedText;
+use function AML\View\InlineCode;
+use function AML\View\InsertedText;
+use function AML\View\KeyboardInput;
+use function AML\View\MarkedText;
+use function AML\View\SampleOutput;
+use function AML\View\SmallText;
+use function AML\View\Subscript;
+use function AML\View\Superscript;
+use function AML\View\Time;
+use function AML\View\Variable;
+use function AML\View\Quote;
+use function AML\View\Details;
+use function AML\View\Div;
+use function AML\View\HeadingGroup;
+use function AML\View\LineBreak;
+use function AML\View\NoScript;
+use function AML\View\Search;
+use function AML\View\Section;
+use function AML\View\Separator;
+use function AML\View\Span;
+use function AML\View\Summary;
 use function AML\View\Popover;
 use function AML\View\FileInput;
 use function AML\View\ConditionalField;
 use function AML\View\MultiStepForm;
-use function AML\View\TextArea;
 use function AML\View\UploadForm;
 use function AML\View\ContextProvider;
 use function AML\View\ContextText;
@@ -105,8 +187,33 @@ function expect(bool $condition, string $message): void
 
 $renderer = new Renderer();
 
+check('Console exposes declarative browser logging', function (): void {
+    expect(
+        Console::log('Count', StateRef::to('count'))->json()
+            === '{"type":"console","level":"log","values":["Count",{"$state":"count"}]}',
+        'Console::log did not create the expected client instruction.',
+    );
+    expect(str_contains(Console::warning('Careful')->json(), '"level":"warn"'), 'Console::warning is invalid.');
+    expect(str_contains(Console::error('Failed')->json(), '"level":"error"'), 'Console::error is invalid.');
+});
+
+check('Alert exposes readable status factories with accessible roles', function () use ($renderer): void {
+    $html = $renderer->render(Group(
+        Alert::success('Saved'),
+        Alert::error('Failed'),
+        Alert::warning('Check this'),
+        Alert::info('For your information'),
+        Alert::loading('Loading'),
+    ));
+    expect(str_contains($html, 'role="status" data-aml-status="success"'), 'Success alert is missing.');
+    expect(str_contains($html, 'role="alert" data-aml-status="error"'), 'Error alert is missing.');
+    expect(str_contains($html, 'role="alert" data-aml-status="warning"'), 'Warning alert is missing.');
+    expect(str_contains($html, 'role="status" data-aml-status="info"'), 'Info alert is missing.');
+    expect(str_contains($html, 'data-aml-status="loading" aria-busy="true"'), 'Loading alert is missing.');
+});
+
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.5', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.6', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -134,6 +241,246 @@ check('Group renders siblings without a wrapper', function () use ($renderer): v
     expect($html === '<span>A</span><span>B</span>', 'Group added a wrapper.');
 });
 
+check('Semantic factories render native HTML elements', function () use ($renderer): void {
+    $html = $renderer->render(Main(
+        Article(
+            Heading('Native semantics'),
+            Paragraph(Text('A '), Strong('clear'), Text(' and '), Emphasis('accessible'), Text(' document.')),
+        ),
+        Aside(
+            Heading('Related information', 2),
+            UnorderedList(ListItem('First point'), ListItem('Second point')),
+        ),
+    ));
+
+    expect(str_starts_with($html, '<main>'), 'Main must render a native main element.');
+    expect(str_contains($html, '<article>'), 'Article must render a native article element.');
+    expect(str_contains($html, '<p>'), 'Paragraph must render a native paragraph element.');
+    expect(str_contains($html, '<strong>'), 'Strong must render native strong emphasis.');
+    expect(str_contains($html, '<em>'), 'Emphasis must render native emphasis.');
+    expect(str_contains($html, '<aside>'), 'Aside must render a native aside element.');
+    expect(str_contains($html, '<ul><li>'), 'List factories must render native list elements.');
+});
+
+check('Native media factories render accessible HTML contracts', function () use ($renderer): void {
+    $video = $renderer->render(
+        Video(
+            Source('/demo.webm', 'video/webm'),
+            Source('/demo.mp4', 'video/mp4'),
+            Track('/captions-fr.vtt', 'captions', 'fr', 'Français', true),
+        )->controls()->preload('metadata')->poster('/poster.jpg')->playsInline(),
+    );
+    expect(str_contains($video, '<video controls preload="metadata" poster="/poster.jpg" playsinline>'), 'Video modifiers are missing.');
+    expect(str_contains($video, '<source src="/demo.webm" type="video/webm">'), 'Video source is missing.');
+    expect(str_contains($video, '<track src="/captions-fr.vtt" kind="captions" srclang="fr" label="Français" default>'), 'Accessible captions are missing.');
+
+    $audio = $renderer->render(Audio(Source('/lesson.mp3', 'audio/mpeg'))->controls()->loop());
+    expect(str_contains($audio, '<audio controls loop>'), 'Audio modifiers are missing.');
+
+    $figure = $renderer->render(Figure(
+        Picture(Source('/cover.webp', 'image/webp'), Image('/cover.jpg', 'Book cover')),
+        FigCaption('An accessible cover'),
+    ));
+    expect(str_contains($figure, '<figure><picture>'), 'Figure and Picture must render native elements.');
+    expect(str_contains($figure, 'alt="Book cover"'), 'The fallback image alternative is missing.');
+    expect(str_contains($figure, '<figcaption><span>An accessible cover</span></figcaption>'), 'Figure caption is missing.');
+
+    ViewTest::assertThrows(
+        static fn () => Video()->preload('eager'),
+        InvalidArgumentException::class,
+        'Unknown media preload mode',
+    );
+    ViewTest::assertThrows(
+        static fn () => Track('/track.vtt', 'lyrics'),
+        InvalidArgumentException::class,
+        'Unknown media track kind',
+    );
+});
+
+check('Native form factories expose accessible declarative controls', function () use ($renderer): void {
+    $html = $renderer->render(Form(
+        Fieldset(
+            Legend('Account'),
+            Label('Email', 'email'),
+            EmailInput('email')->id('email')->required()->autocomplete('email')->placeholder('name@example.com'),
+            Label('Password', 'password'),
+            PasswordInput('password')->id('password')->required()->minLength(8)->maxLength(120),
+            TextArea('message')->id('message')->rows(6)->columns(40)->maxLength(1000)->readOnly(),
+            NumberInput('age', 18)->min(0)->max(130)->step(1),
+            DateInput('birthday'),
+            SearchInput('query'),
+            HiddenInput('token', 'safe-value'),
+            RadioInput('plan', 'free', true),
+            Datalist('languages', Option('php', 'PHP'), Option('go', 'Go')),
+            Output('total', '42'),
+            Progress(3, 10),
+            Meter(75, 0, 100, 25, 80, 70),
+        ),
+    ));
+
+    expect(str_contains($html, '<fieldset><legend>'), 'Fieldset and Legend are missing.');
+    expect(str_contains($html, '<label for="email">'), 'The native label association is missing.');
+    expect(str_contains($html, 'type="email"') && str_contains($html, 'autocomplete="email"'), 'Email input semantics are missing.');
+    expect(str_contains($html, '<textarea name="message" id="message" rows="6" cols="40" maxlength="1000" readonly>'), 'Textarea modifiers are missing.');
+    expect(str_contains($html, '<datalist id="languages">'), 'Datalist is missing.');
+    expect(str_contains($html, '<output name="total">'), 'Output is missing.');
+    expect(str_contains($html, '<progress value="3" max="10">'), 'Progress is missing.');
+    $reactiveProgress = $renderer->render(Progress(StateRef::to('completion', 4), 10));
+    expect(
+        str_contains($reactiveProgress, 'value="4"') && str_contains($reactiveProgress, 'data-aml-bind="completion"'),
+        'Reactive progress binding is missing.',
+    );
+    expect(str_contains($html, '<meter value="75" min="0" max="100"'), 'Meter is missing.');
+
+    ViewTest::assertThrows(
+        static fn () => TextArea('message')->rows(0),
+        InvalidArgumentException::class,
+        'Textarea rows must be positive',
+    );
+    ViewTest::assertThrows(
+        static fn () => NumberInput('quantity')->step(0),
+        InvalidArgumentException::class,
+        'Input step must be positive',
+    );
+});
+
+check('Native table factories preserve semantic structure', function () use ($renderer): void {
+    $html = $renderer->render(Table(
+        Caption('Registered users'),
+        ColumnGroup(TableColumn(), TableColumn()),
+        TableHead(
+            TableRow(
+                TableHeader('Name')->scope('col'),
+                TableHeader('Email')->scope('col'),
+            ),
+        ),
+        TableBody(
+            TableRow(TableCell('André'), TableCell('andre@example.com')),
+        ),
+        TableFoot(
+            TableRow(TableCell('1 user')->colSpan(2)->rowSpan(1)),
+        ),
+    ));
+
+    expect(str_starts_with($html, '<table><caption>'), 'Table and Caption are missing.');
+    expect(str_contains($html, '<colgroup><col><col></colgroup>'), 'Native table columns are missing.');
+    expect(str_contains($html, '<thead><tr><th scope="col">'), 'Accessible column headers are missing.');
+    expect(str_contains($html, '<tbody><tr><td>'), 'Table body cells are missing.');
+    expect(str_contains($html, '<tfoot><tr><td colspan="2" rowspan="1">'), 'Table footer spans are missing.');
+
+    ViewTest::assertThrows(
+        static fn () => TableHeader('Invalid')->scope('page'),
+        InvalidArgumentException::class,
+        'Unknown table header scope',
+    );
+    ViewTest::assertThrows(
+        static fn () => TableCell('Invalid')->colSpan(0),
+        InvalidArgumentException::class,
+        'Table column span',
+    );
+});
+
+check('Links and embedded media use secure accessible contracts', function () use ($renderer): void {
+    $links = $renderer->render(Group(
+        Link('Documentation', '/docs'),
+        Link('Section', '#installation'),
+        Link('Query', '?language=fr'),
+        ExternalLink('GitHub', 'https://github.com/MR-C0DE')->rel('nofollow'),
+        EmailLink('Email', 'team@example.com'),
+        PhoneLink('Call', '+1 (613) 555-0123'),
+        DownloadLink('Download', '/aml.pkg', 'aml.pkg'),
+    ));
+    expect(str_contains($links, 'target="_blank" rel="noopener noreferrer nofollow"'), 'External links must preserve safe relationships.');
+    expect(str_contains($links, 'href="mailto:team@example.com"'), 'Email link is missing.');
+    expect(str_contains($links, 'href="tel:+16135550123"'), 'Phone link is missing.');
+    expect(str_contains($links, 'download="aml.pkg"'), 'Download link is missing.');
+
+    foreach (['javascript:alert(1)', 'data:text/html,test', 'vbscript:msgbox(1)', "java\nscript:alert(1)"] as $unsafeHref) {
+        ViewTest::assertThrows(
+            static fn () => Link('Unsafe', $unsafeHref),
+            InvalidArgumentException::class,
+        );
+    }
+
+    $media = $renderer->render(Group(
+        Iframe('/embed', 'Interactive demonstration')->loading('lazy')->allowFullScreen(),
+        Embed('/document.pdf', 'application/pdf'),
+        ObjectMedia('/diagram.svg', 'image/svg+xml', Text('Diagram unavailable.')),
+        ImageMap('actions', Area('rect', '0,0,40,40', '/docs', 'Open documentation')),
+        Canvas('Canvas visualization unavailable.'),
+    ));
+    expect(str_contains($media, '<iframe src="/embed" title="Interactive demonstration" loading="lazy" allowfullscreen>'), 'Accessible iframe attributes are missing.');
+    expect(str_contains($media, '<embed src="/document.pdf" type="application/pdf">'), 'Embed is missing.');
+    expect(str_contains($media, '<object data="/diagram.svg" type="image/svg+xml">'), 'Object fallback is missing.');
+    expect(str_contains($media, '<map name="actions"><area shape="rect"'), 'Image map is missing.');
+    expect(str_contains($media, '<canvas><span>Canvas visualization unavailable.</span></canvas>'), 'Canvas fallback is missing.');
+
+    ViewTest::assertThrows(
+        static fn () => Iframe('/embed', ''),
+        InvalidArgumentException::class,
+        'accessible title',
+    );
+    ViewTest::assertThrows(
+        static fn () => EmailLink('Email', 'invalid'),
+        InvalidArgumentException::class,
+        'Invalid email address',
+    );
+});
+
+check('Text and typography preserve meaning and presentation', function () use ($renderer): void {
+    $html = $renderer->render(Article(
+        Paragraph(Text('Water is H'), Subscript('2'), Text('O and 10'), Superscript('2'), Text(' is 100.')),
+        Paragraph(SmallText('Fine print'), MarkedText('highlight'), DeletedText('old'), InsertedText('new')),
+        Paragraph(Quote('Short quote'), Abbreviation('HTML', 'HyperText Markup Language')),
+        BlockQuote(Paragraph('Long quote'))->cite('https://example.com/source'),
+        CodeBlock('<?php echo "Hello";'),
+        Paragraph(InlineCode('$user->save()'), KeyboardInput('Ctrl + S'), SampleOutput('Saved'), Variable('user')),
+        Time('26 September 2026', '2026-09-26'),
+        Address('Toronto, Canada'),
+        Text('Styled')
+            ->fontSize(32)
+            ->fontWeight(700)
+            ->lineHeight(1.4)
+            ->letterSpacing(1)
+            ->textAlign('center')
+            ->textColor('#111827'),
+    ));
+
+    foreach (['<sub>', '<sup>', '<small>', '<mark>', '<del>', '<ins>', '<q>', '<abbr', '<blockquote', '<pre><code>', '<kbd>', '<samp>', '<var>', '<time', '<address>'] as $tag) {
+        expect(str_contains($html, $tag), "Missing semantic typography element: {$tag}");
+    }
+    expect(str_contains($html, '&lt;?php echo &quot;Hello&quot;;'), 'CodeBlock must escape executable markup.');
+    expect(str_contains($html, 'font-size:32px') && str_contains($html, 'font-weight:700'), 'Typography modifiers are missing.');
+
+    ViewTest::assertThrows(
+        static fn () => Text('Unsafe')->textColor('red;display:none'),
+        InvalidArgumentException::class,
+        'Invalid text color',
+    );
+    ViewTest::assertThrows(
+        static fn () => Text('Invalid')->fontWeight(950),
+        InvalidArgumentException::class,
+        'Unknown font weight',
+    );
+});
+
+check('Native sections and containers retain their HTML semantics', function () use ($renderer): void {
+    $html = $renderer->render(Main(
+        HeadingGroup(Heading('PHPAML'), Paragraph('Declarative PHP interfaces.')),
+        Search(Form(SearchInput('query'), Button('Search'))),
+        Section(
+            Div(Span('First'), LineBreak(), Span('Second')),
+            Details(Summary('Installation'), Paragraph('Install AML first.'))->open(),
+            Separator(),
+            NoScript('JavaScript is required for reactive interactions.'),
+        ),
+    ));
+
+    foreach (['<hgroup>', '<search>', '<div>', '<span>', '<br>', '<details open>', '<summary>', '<hr>', '<noscript>'] as $tag) {
+        expect(str_contains($html, $tag), "Missing native container: {$tag}");
+    }
+});
+
 check('Element and Component factories avoid explicit construction', function () use ($renderer): void {
     $component = new class extends Component {
         public function body(): View { return Text('Factory component'); }
@@ -148,9 +495,59 @@ check('Element and Component factories avoid explicit construction', function ()
     }
 });
 
+check('Generic elements reject inline executable attributes and CSS injection', function (): void {
+    ViewTest::assertThrows(
+        static fn () => \AML\View\Element('button')->attribute('onclick', 'alert(1)'),
+        InvalidArgumentException::class,
+        'Unsafe HTML attribute',
+    );
+    ViewTest::assertThrows(
+        static fn () => \AML\View\Element('div')->attribute('style', 'display:none'),
+        InvalidArgumentException::class,
+        'Unsafe HTML attribute',
+    );
+    ViewTest::assertThrows(
+        static fn () => \AML\View\Element('div')->style('color', 'red;display:none'),
+        InvalidArgumentException::class,
+        'Unsafe CSS value',
+    );
+});
+
 check('Classes are explicit and deduplicated', function () use ($renderer): void {
     $html = $renderer->render(VStack(Text('Home'))->class('home', 'featured', 'home'));
     expect(str_contains($html, 'class="home featured"'), 'Classes were not rendered correctly.');
+});
+
+check('VStack centers intrinsic children and supports explicit alignment', function () use ($renderer): void {
+    $centered = $renderer->render(VStack(Button('Centered')));
+    expect(str_contains($centered, 'align-items:center'), 'VStack must center children by default.');
+
+    $leading = $renderer->render(VStack(Button('Leading'))->alignment('leading'));
+    expect(str_contains($leading, 'align-items:flex-start'), 'VStack leading alignment is missing.');
+
+    $trailing = $renderer->render(VStack(Button('Trailing'))->alignment('trailing'));
+    expect(str_contains($trailing, 'align-items:flex-end'), 'VStack trailing alignment is missing.');
+
+    ViewTest::assertThrows(
+        static fn () => VStack()->alignment('diagonal'),
+        InvalidArgumentException::class,
+        'Unknown alignment',
+    );
+});
+
+check('HStack centers children on its cross axis', function () use ($renderer): void {
+    $centered = $renderer->render(HStack(Text('Label'), Button('Action')));
+    expect(str_contains($centered, 'flex-direction:row'), 'HStack must render a horizontal flex container.');
+    expect(str_contains($centered, 'align-items:center'), 'HStack must center children vertically by default.');
+
+    $stretch = $renderer->render(HStack(Text('Label'), Button('Action'))->alignment('stretch'));
+    expect(str_contains($stretch, 'align-items:stretch'), 'HStack stretch alignment is missing.');
+
+    $top = $renderer->render(HStack(Text('Label'), Button('Action'))->alignment('top'));
+    expect(str_contains($top, 'align-items:flex-start'), 'HStack top alignment is missing.');
+
+    $bottom = $renderer->render(HStack(Text('Label'), Button('Action'))->alignment('bottom'));
+    expect(str_contains($bottom, 'align-items:flex-end'), 'HStack bottom alignment is missing.');
 });
 
 check('Theme primitives render without a content wrapper', function () use ($renderer): void {
@@ -159,8 +556,20 @@ check('Theme primitives render without a content wrapper', function () use ($ren
 });
 
 check('Page metadata escapes SEO values', function (): void {
-    $head = (new PageMetadata(title: '<Home>', description: 'A & B'))->render();
+    $metadata = (new PageMetadata(title: '<Home>', description: 'A & B'))
+        ->language('fr-CA')->direction('ltr')
+        ->favicon('/favicon.svg', 'image/svg+xml')
+        ->preload('/font.woff2', 'font', 'font/woff2', true)
+        ->meta('theme-color', '#ffffff')
+        ->structuredData(['@context' => 'https://schema.org', '@type' => 'WebSite', 'name' => '<PHPAML>']);
+    $head = $metadata->render('test-nonce');
     expect(str_contains($head, '&lt;Home&gt;') && str_contains($head, 'A &amp; B'), 'Metadata was not escaped.');
+    expect($metadata->htmlAttributes() === 'lang="fr-CA" dir="ltr"', 'Document language or direction is missing.');
+    expect(str_contains($head, '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'), 'Favicon metadata is missing.');
+    expect(str_contains($head, 'rel="preload"') && str_contains($head, 'crossorigin'), 'Preload metadata is missing.');
+    expect(str_contains($head, 'name="theme-color"'), 'Custom metadata is missing.');
+    expect(str_contains($head, 'type="application/ld+json" nonce="test-nonce"'), 'Nonce-protected structured data is missing.');
+    expect(str_contains($head, '\\u003CPHPAML\\u003E'), 'Structured data must escape HTML-significant characters.');
 });
 
 check('Client state emits no server event identifier', function () use ($renderer): void {

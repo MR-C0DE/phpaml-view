@@ -2,6 +2,14 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.6 — 2026-09-26
+
+- add native semantic, typography, form, list, table, link and media factories;
+- add the singular `Alert` component and typed `Console::log()` client action;
+- add safe element modifiers and richer page metadata;
+- support reactive native progress elements through PHPAML Engine beta 4;
+- expand API, security, compatibility and regression-test documentation.
+
 ## 0.1.0-beta.5
 
 - Document the complete Composer command for prerelease projects so the root

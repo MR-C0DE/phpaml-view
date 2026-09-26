@@ -21,12 +21,47 @@
 - `required()`, `email()`, `minLength()`: synchronous frontend validation.
 - `validateWith(ApiAction $request, ...)`: explicit asynchronous validation.
 
-## Components
+## Native components
+
+Native status and progress primitives remain declarative and accessible:
+
+```php
+use AML\Engine\StateRef;
+use AML\View\Alert;
+
+Alert::success('Saved');
+Alert::warning('Review this value');
+
+Progress(StateRef::to('completion', $this->completion), 100)
+    ->attribute('aria-label', 'Upload progress');
+```
+
+`Progress()` accepts a numeric value or a numeric `StateRef`. With a state
+reference, PHPAML Engine updates the native `HTMLProgressElement.value`
+property rather than replacing its text content. The initial value must remain
+between zero and the positive maximum.
 
 - Layout: `VStack`, `HStack`, `Column`, `Row`, `Grid`, `ZStack`, `Spacer`.
-- Content: `Heading`, `Text`, `Image`, `Link`, `Section`, `MainContent`.
-- Actions: `Button`, `Action`, `Alert`.
-- Forms: `Form`, `Input`, `TextArea`, `Select`, `Checkbox`.
+- Sections: `Header`, `Navigation`, `Main`, `Section`, `Article`, `Aside`,
+  `Footer`, `Search`, `HeadingGroup`, `Details`, `Summary`, `Div`, `Span`,
+  `Separator`, `LineBreak`, `NoScript`.
+- Text: `Heading`, `Text`, `Paragraph`, `Strong`, `Emphasis`, `SmallText`,
+  `MarkedText`, `DeletedText`, `InsertedText`, `Subscript`, `Superscript`,
+  `InlineCode`, `CodeBlock`, `Quote`, `BlockQuote`, `Abbreviation`, `Time`,
+  `Address`, `KeyboardInput`, `SampleOutput`, `Variable`.
+- Lists and tables: `UnorderedList`, `OrderedList`, `ListItem`, `Table`,
+  `Caption`, `TableHead`, `TableBody`, `TableFoot`, `TableRow`, `TableHeader`,
+  `TableCell`, `ColumnGroup`, `TableColumn`, `DataTable`, `Each`,
+  `SortableEach`, `VirtualList`.
+- Media: `Image`, `Picture`, `Source`, `Video`, `Audio`, `Track`, `Figure`,
+  `FigCaption`, `Iframe`, `Embed`, `ObjectMedia`, `ImageMap`, `Area`, `Canvas`.
+- Links: `Link`, `ExternalLink`, `EmailLink`, `PhoneLink`, `DownloadLink`.
+- Forms: `Form`, `UploadForm`, `Input`, `EmailInput`, `PasswordInput`,
+  `NumberInput`, `DateInput`, `SearchInput`, `HiddenInput`, `FileInput`,
+  `RadioInput`, `Checkbox`, `TextArea`, `Select`, `Option`, `Datalist`,
+  `Label`, `Fieldset`, `Legend`, `Output`, `Progress`, `Meter`.
+- Actions: `Button`, `Action`, the compatible `Alert()` factory, and
+  `Alert::success()`, `error()`, `warning()`, `info()`, `loading()`.
 - Composition: `Group`, `RouterView`, `Slot`, `Content`, `ThemeProvider`, `ThemeSwitcher`.
 
 `Group(...$children)` renders its children as siblings without producing an
@@ -35,7 +70,16 @@ does not need a semantic or styled container.
 
 ## Modifiers
 
-- Layout: `gap()`, `spacing()`, `padding()`, `center()`.
+- Layout: `gap()`, `spacing()`, `padding()`, `center()`, `alignment()`.
+- Typography: `fontSize()`, `fontWeight()`, `lineHeight()`, `letterSpacing()`,
+  `textAlign()`, `textColor()`.
+- Forms: `id()`, `placeholder()`, `autocomplete()`, `required()`,
+  `minLength()`, `maxLength()`, `rows()`, `columns()`, `min()`, `max()`,
+  `step()`, `readOnly()`, `multiple()`.
+- Tables: `scope()`, `colSpan()`, `rowSpan()`.
+- Links/media: `target()`, `rel()`, `language()`, `referrerPolicy()`,
+  `download()`, `controls()`, `autoplay()`, `muted()`, `loop()`,
+  `playsInline()`, `poster()`, `preload()`, `loading()`, `allowFullScreen()`.
 - HTML/CSS: `class(...$names)`, `attribute()`, `style()`.
 - Events: `onClick(ClientInstruction)` and its alias `click()`.
 - Actions: `disabled()`, `status()`, `loadingLabel()`.
@@ -159,14 +203,19 @@ public function metadata(): PageMetadata
         ->title('User ' . $this->param('id'))
         ->description('Public user profile')
         ->canonical('https://example.com/users/' . $this->param('id'))
+        ->language('en')->direction('ltr')
+        ->favicon('/favicon.svg', 'image/svg+xml')
+        ->meta('theme-color', '#ffffff')
+        ->structuredData(['@context' => 'https://schema.org', '@type' => 'ProfilePage'])
         ->openGraph(image: 'https://example.com/assets/profile.png')
         ->twitter(image: 'https://example.com/assets/profile.png');
 }
 ```
 
-Use `->noIndex()` for private or temporary pages. `FileApplication::head()`
-generates escaped `<title>`, description, canonical, robots, Open Graph and
-Twitter tags for the active file-based route.
+Use `->noIndex()` for private or temporary pages. `PageMetadata` also supports
+typed preloads and renders `lang`/`dir` attributes for the document shell.
+Structured data is JSON-encoded with HTML-significant characters escaped and
+accepts the request CSP nonce through `render($nonce)`.
 
 ## Effects
 

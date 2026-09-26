@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.5`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.6`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
@@ -55,7 +55,7 @@ final class CounterPage extends Page
     public function body(): View
     {
         return VStack(
-            Heading('AML View')->size(42)->bold(),
+            Heading('AML View')->fontSize(42)->fontWeight('bold'),
             Text($this->summary),
             Button('Add one')
                 ->onClick(ClientAction::increment('count'))
@@ -92,6 +92,32 @@ final class ContactPage extends Page
 
 PHPAML Engine validates controls locally and again before form submission.
 Invalid controls receive accessible error markup automatically.
+
+Status messages use the singular `Alert` API:
+
+```php
+Alert::success('Saved');
+Alert::error('Unable to save');
+Alert::warning('Review this value');
+Alert::info('A new version is available');
+Alert::loading('Loading…');
+```
+
+Native progress can follow client state without a request or custom script:
+
+```php
+use AML\Engine\StateRef;
+use function AML\View\Progress;
+
+Progress(StateRef::to('completion', $this->completion), 100)
+    ->attribute('aria-label', 'Completion');
+```
+
+Changing `completion` through a declarative action updates both the state and
+the browser's native progress value.
+
+The original `Alert($message, ActionStatus $status)` function remains available
+for compatibility.
 
 ## Styling elements
 
@@ -185,6 +211,9 @@ public function metadata(): PageMetadata
         ->title('User ' . $this->param('id'))
         ->description('Public user profile')
         ->canonical('https://example.com/users/' . $this->param('id'))
+        ->language('en')->direction('ltr')
+        ->favicon('/favicon.svg', 'image/svg+xml')
+        ->meta('theme-color', '#ffffff')
         ->openGraph(image: 'https://example.com/assets/profile.png')
         ->twitter(image: 'https://example.com/assets/profile.png');
 }
@@ -192,7 +221,9 @@ public function metadata(): PageMetadata
 
 Call `->noIndex()` for a page that search engines must not index.
 `FileApplication::head()` safely renders the title, description, canonical,
-robots, Open Graph and Twitter tags for the active route.
+robots, Open Graph, Twitter, favicon, preload and structured-data tags for the
+active route. The generated document also receives the declared language and
+text direction.
 
 AML View contains no automatic server-interaction transport. Applications use
 client actions for local behavior and an explicit `Api::*()` action when the

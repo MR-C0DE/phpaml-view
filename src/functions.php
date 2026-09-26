@@ -345,7 +345,7 @@ function Column(View ...$children): Element
 
 function VStack(View ...$children): Element
 {
-    return Column(...$children);
+    return Column(...$children)->alignment('center');
 }
 
 function Row(View ...$children): Element
@@ -357,7 +357,7 @@ function Row(View ...$children): Element
 
 function HStack(View ...$children): Element
 {
-    return Row(...$children);
+    return Row(...$children)->alignment('center');
 }
 
 function ZStack(View ...$children): Element
@@ -387,15 +387,161 @@ function Image(string $source, string $alt = ''): Element
     return (new Element('img'))->attribute('src', $source)->attribute('alt', $alt);
 }
 
+function Video(View ...$children): Element
+{
+    return new Element('video', ...$children);
+}
+
+function Audio(View ...$children): Element
+{
+    return new Element('audio', ...$children);
+}
+
+function Source(string $source, ?string $type = null, ?string $media = null): Element
+{
+    return (new Element('source'))
+        ->attribute('src', $source)
+        ->attribute('type', $type)
+        ->attribute('media', $media);
+}
+
+function Track(
+    string $source,
+    string $kind = 'captions',
+    ?string $language = null,
+    ?string $label = null,
+    bool $default = false,
+): Element {
+    $kind = strtolower($kind);
+    if (!in_array($kind, ['subtitles', 'captions', 'descriptions', 'chapters', 'metadata'], true)) {
+        throw new \InvalidArgumentException("Unknown media track kind: {$kind}");
+    }
+
+    return (new Element('track'))
+        ->attribute('src', $source)
+        ->attribute('kind', $kind)
+        ->attribute('srclang', $language)
+        ->attribute('label', $label)
+        ->attribute('default', $default);
+}
+
+function Picture(View ...$children): Element
+{
+    return new Element('picture', ...$children);
+}
+
+function Figure(View ...$children): Element
+{
+    return new Element('figure', ...$children);
+}
+
+function FigCaption(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('figcaption', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function safeLinkHref(string $href): string
+{
+    $href = trim($href);
+    if (preg_match('/[\x00-\x1F\x7F]/', $href) === 1) {
+        throw new \InvalidArgumentException('A link URL cannot contain control characters.');
+    }
+
+    if (preg_match('/^([a-z][a-z0-9+.-]*):/i', $href, $match) === 1) {
+        $scheme = strtolower($match[1]);
+        if (!in_array($scheme, ['http', 'https', 'mailto', 'tel'], true)) {
+            throw new \InvalidArgumentException("Unsafe or unsupported link protocol: {$scheme}");
+        }
+    }
+
+    return $href;
+}
+
 function Link(string|Closure $label, string $href): Element
 {
-    return (new Element('a', textValue($label)))->attribute('href', $href);
+    return (new Element('a', textValue($label)))->attribute('href', safeLinkHref($href));
+}
+
+function ExternalLink(string|Closure $label, string $href): Element
+{
+    return Link($label, $href)->target('_blank')->rel('noopener', 'noreferrer');
+}
+
+function EmailLink(string|Closure $label, string $email): Element
+{
+    if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        throw new \InvalidArgumentException("Invalid email address: {$email}");
+    }
+    return Link($label, 'mailto:' . $email);
+}
+
+function PhoneLink(string|Closure $label, string $number): Element
+{
+    $normalized = preg_replace('/[\s().-]+/', '', $number) ?? '';
+    if (preg_match('/^\+?[0-9]{3,15}$/', $normalized) !== 1) {
+        throw new \InvalidArgumentException("Invalid phone number: {$number}");
+    }
+    return Link($label, 'tel:' . $normalized);
+}
+
+function DownloadLink(string|Closure $label, string $href, ?string $filename = null): Element
+{
+    return Link($label, $href)->download($filename);
+}
+
+function Iframe(string $source, string $title): Element
+{
+    if (trim($title) === '') throw new \InvalidArgumentException('An iframe requires an accessible title.');
+    return (new Element('iframe'))->attribute('src', $source)->attribute('title', $title);
+}
+
+function Embed(string $source, ?string $type = null): Element
+{
+    return (new Element('embed'))->attribute('src', $source)->attribute('type', $type);
+}
+
+function ObjectMedia(string $data, ?string $type = null, View ...$fallback): Element
+{
+    return (new Element('object', ...$fallback))->attribute('data', $data)->attribute('type', $type);
+}
+
+function ImageMap(string $name, Element ...$areas): Element
+{
+    if ($name === '' || preg_match('/\s/', $name) === 1) {
+        throw new \InvalidArgumentException('An image map name must be a non-empty token.');
+    }
+    return (new Element('map', ...$areas))->attribute('name', $name);
+}
+
+function Area(string $shape, string $coordinates, string $href, string $alt): Element
+{
+    $shape = strtolower($shape);
+    if (!in_array($shape, ['rect', 'circle', 'poly', 'default'], true)) {
+        throw new \InvalidArgumentException("Unknown image-map area shape: {$shape}");
+    }
+    if (trim($alt) === '') throw new \InvalidArgumentException('An image-map area requires alternative text.');
+    return (new Element('area'))
+        ->attribute('shape', $shape)
+        ->attribute('coords', $shape === 'default' ? null : $coordinates)
+        ->attribute('href', safeLinkHref($href))
+        ->attribute('alt', $alt);
+}
+
+function Canvas(string|Closure|StateRef|View ...$fallback): Element
+{
+    return new Element('canvas', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $fallback,
+    ));
 }
 
 function Alert(string|Closure $message, ActionStatus $status = ActionStatus::Idle): Element
 {
     return (new Element('div', textValue($message)))
-        ->attribute('role', $status === ActionStatus::Error ? 'alert' : 'status')
+        ->attribute('role', in_array($status, [ActionStatus::Error, ActionStatus::Warning], true) ? 'alert' : 'status')
         ->attribute('data-aml-status', $status->value);
 }
 
@@ -404,9 +550,279 @@ function Section(View ...$children): Element
     return new Element('section', ...$children);
 }
 
-function MainContent(View ...$children): Element
+function Div(View ...$children): Element
+{
+    return new Element('div', ...$children);
+}
+
+function Span(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('span', $children);
+}
+
+function Search(View ...$children): Element
+{
+    return new Element('search', ...$children);
+}
+
+function HeadingGroup(View ...$children): Element
+{
+    return new Element('hgroup', ...$children);
+}
+
+function Details(View ...$children): Element
+{
+    return new Element('details', ...$children);
+}
+
+function Summary(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('summary', $children);
+}
+
+function Separator(): Element
+{
+    return new Element('hr');
+}
+
+function LineBreak(): Element
+{
+    return new Element('br');
+}
+
+function NoScript(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('noscript', $children);
+}
+
+function Header(View ...$children): Element
+{
+    return new Element('header', ...$children);
+}
+
+function Navigation(View ...$children): Element
+{
+    return new Element('nav', ...$children);
+}
+
+function Main(View ...$children): Element
 {
     return new Element('main', ...$children);
+}
+
+function MainContent(View ...$children): Element
+{
+    return Main(...$children);
+}
+
+function Article(View ...$children): Element
+{
+    return new Element('article', ...$children);
+}
+
+function Aside(View ...$children): Element
+{
+    return new Element('aside', ...$children);
+}
+
+function Footer(View ...$children): Element
+{
+    return new Element('footer', ...$children);
+}
+
+function Paragraph(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('p', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function Strong(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('strong', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function Emphasis(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('em', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+/** @param list<string|Closure|StateRef|View> $children */
+function semanticTextElement(string $tag, array $children): Element
+{
+    return new Element($tag, ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function SmallText(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('small', $children);
+}
+
+function MarkedText(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('mark', $children);
+}
+
+function DeletedText(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('del', $children);
+}
+
+function InsertedText(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('ins', $children);
+}
+
+function Subscript(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('sub', $children);
+}
+
+function Superscript(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('sup', $children);
+}
+
+function InlineCode(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('code', $children);
+}
+
+function CodeBlock(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('pre', semanticTextElement('code', $children));
+}
+
+function Quote(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('q', $children);
+}
+
+function BlockQuote(View ...$children): Element
+{
+    return new Element('blockquote', ...$children);
+}
+
+function Abbreviation(string|Closure $label, string $meaning): Element
+{
+    if (trim($meaning) === '') throw new \InvalidArgumentException('An abbreviation requires its expanded meaning.');
+    return (new Element('abbr', textValue($label)))->attribute('title', $meaning);
+}
+
+function Time(string|Closure $label, string $dateTime): Element
+{
+    if (trim($dateTime) === '') throw new \InvalidArgumentException('A time element requires a machine-readable datetime.');
+    return (new Element('time', textValue($label)))->attribute('datetime', $dateTime);
+}
+
+function Address(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('address', $children);
+}
+
+function KeyboardInput(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('kbd', $children);
+}
+
+function SampleOutput(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('samp', $children);
+}
+
+function Variable(string|Closure|StateRef|View ...$children): Element
+{
+    return semanticTextElement('var', $children);
+}
+
+function ListItem(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('li', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function UnorderedList(View ...$items): Element
+{
+    return new Element('ul', ...$items);
+}
+
+function OrderedList(View ...$items): Element
+{
+    return new Element('ol', ...$items);
+}
+
+function Table(View ...$children): Element
+{
+    return new Element('table', ...$children);
+}
+
+function Caption(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('caption', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function TableHead(View ...$rows): Element
+{
+    return new Element('thead', ...$rows);
+}
+
+function TableBody(View ...$rows): Element
+{
+    return new Element('tbody', ...$rows);
+}
+
+function TableFoot(View ...$rows): Element
+{
+    return new Element('tfoot', ...$rows);
+}
+
+function TableRow(View ...$cells): Element
+{
+    return new Element('tr', ...$cells);
+}
+
+function TableHeader(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('th', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function TableCell(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('td', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
+}
+
+function ColumnGroup(Element ...$columns): Element
+{
+    return new Element('colgroup', ...$columns);
+}
+
+function TableColumn(int $span = 1): Element
+{
+    if ($span < 1 || $span > 1000) {
+        throw new \InvalidArgumentException('Table column span must be between 1 and 1000.');
+    }
+    return (new Element('col'))->attribute('span', $span === 1 ? null : $span);
 }
 
 function Action(string|Closure $label): Element
@@ -439,6 +855,41 @@ function Input(string $name, string $type = 'text', string|int|float|null $value
         ->attribute('value', $value);
 }
 
+function EmailInput(string $name, string $value = ''): Element
+{
+    return Input($name, 'email', $value)->email();
+}
+
+function PasswordInput(string $name): Element
+{
+    return Input($name, 'password');
+}
+
+function NumberInput(string $name, int|float|null $value = null): Element
+{
+    return Input($name, 'number', $value);
+}
+
+function DateInput(string $name, ?string $value = null): Element
+{
+    return Input($name, 'date', $value);
+}
+
+function SearchInput(string $name, string $value = ''): Element
+{
+    return Input($name, 'search', $value);
+}
+
+function HiddenInput(string $name, string|int|float|null $value = null): Element
+{
+    return Input($name, 'hidden', $value);
+}
+
+function RadioInput(string $name, string $value, bool $checked = false): Element
+{
+    return Input($name, 'radio', $value)->attribute('checked', $checked);
+}
+
 /** @param list<string> $accept */
 function FileInput(string $name, array $accept = [], bool $multiple = false, ?StateRef $files = null): Element
 {
@@ -455,6 +906,24 @@ function FileInput(string $name, array $accept = [], bool $multiple = false, ?St
 function TextArea(string $name, string $value = ''): Element
 {
     return (new Element('textarea', textValue($value)))->attribute('name', $name);
+}
+
+function Label(string|Closure $label, string $for): Element
+{
+    return (new Element('label', textValue($label)))->attribute('for', $for);
+}
+
+function Fieldset(View ...$children): Element
+{
+    return new Element('fieldset', ...$children);
+}
+
+function Legend(string|Closure|StateRef|View ...$children): Element
+{
+    return new Element('legend', ...array_map(
+        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        $children,
+    ));
 }
 
 function Checkbox(string $name, bool $checked = false, string $value = '1'): Element
@@ -479,6 +948,57 @@ function Select(string $name, array $options, string|int|null $selected = null):
     return (new Element('select', ...$choices))
         ->attribute('name', $name)
         ->attribute('data-aml-value', $selected);
+}
+
+function Option(string $value, ?string $label = null, bool $selected = false): Element
+{
+    return (new Element('option', textValue($label ?? $value)))
+        ->attribute('value', $value)
+        ->attribute('selected', $selected);
+}
+
+function Datalist(string $id, Element ...$options): Element
+{
+    return (new Element('datalist', ...$options))->id($id);
+}
+
+function Output(string $name, string|Closure|StateRef|View $content = ''): Element
+{
+    $view = $content instanceof View ? $content : Text($content);
+    return (new Element('output', $view))->attribute('name', $name);
+}
+
+function Progress(int|float|StateRef $value, int|float $max = 1): Element
+{
+    $initial = $value instanceof StateRef ? $value->initial : $value;
+    if (!is_int($initial) && !is_float($initial)) {
+        throw new \InvalidArgumentException('Progress state must contain a numeric value.');
+    }
+    if ($max <= 0 || $initial < 0 || $initial > $max) {
+        throw new \InvalidArgumentException('Progress value must be between zero and its positive maximum.');
+    }
+    $progress = (new Element('progress'))->attribute('value', $initial)->attribute('max', $max);
+    return $value instanceof StateRef ? $progress->attribute('data-aml-bind', $value->name) : $progress;
+}
+
+function Meter(
+    int|float $value,
+    int|float $min = 0,
+    int|float $max = 1,
+    int|float|null $low = null,
+    int|float|null $high = null,
+    int|float|null $optimum = null,
+): Element {
+    if ($max <= $min || $value < $min || $value > $max) {
+        throw new \InvalidArgumentException('Meter value must be inside a valid minimum and maximum range.');
+    }
+    return (new Element('meter'))
+        ->attribute('value', $value)
+        ->attribute('min', $min)
+        ->attribute('max', $max)
+        ->attribute('low', $low)
+        ->attribute('high', $high)
+        ->attribute('optimum', $optimum);
 }
 
 function Content(): ContentView

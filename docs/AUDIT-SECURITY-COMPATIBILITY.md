@@ -1,6 +1,8 @@
 # AML View and PHPAML Engine security and compatibility audit
 
-Audit date: 2026-08-17
+Initial audit: 2026-08-17
+
+Last regression validation: 2026-09-26
 
 ## Scope
 
@@ -47,7 +49,7 @@ Audit date: 2026-08-17
 ## Compatibility
 
 - PHP requirement: PHP 8.2 or newer.
-- AML View `0.1.0-beta.5` is validated with PHPAML Engine `0.1.0-beta.3`.
+- AML View `0.1.0-beta.6` is validated with PHPAML Engine `0.1.0-beta.4`.
 - The engine requires standard modern browser features including modules of the
   DOM, `fetch`, `AbortController`, `MutationObserver`, Web Storage and optional
   IndexedDB for states that explicitly select it.
@@ -56,10 +58,14 @@ Audit date: 2026-08-17
 
 ## Validation result
 
-- AML View unit suite: 46 passed, 0 failed.
-- AML View integration suite: 4 passed, 0 failed.
-- PHPAML Engine unit suite: 18 passed, 0 failed.
-- CLI AML View smoke suite: passed.
+The authoritative test counts are emitted by the current suites and are not
+duplicated here, because new regression tests are added between releases. The
+following suites passed during the latest validation:
+
+- complete AML View unit suite;
+- complete AML View integration suite;
+- complete PHPAML Engine unit suite;
+- CLI AML View generation smoke suite.
 - Browser scenarios: nested transactions, rich collections, isolated roots,
   history restoration, IndexedDB migrations, corrupt storage and cross-tab sync passed.
 - Reactivity stress scenarios: 1,000 keyed items, computed propagation,
