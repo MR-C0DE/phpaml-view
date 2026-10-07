@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.6`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.7`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
@@ -35,7 +35,6 @@ composer require phpaml/view:^0.1@beta phpaml/engine:^0.1@beta
 ```php
 <?php
 
-use AML\View\Computed;
 use AML\View\Page;
 use AML\View\State;
 use AML\View\View;
@@ -46,24 +45,24 @@ final class CounterPage extends Page
     #[State]
     public int $count = 0;
 
-    #[Computed]
-    protected function summary(): string
-    {
-        return "Current value: {$this->count}";
-    }
-
     public function body(): View
     {
         return VStack(
             Heading('AML View')->fontSize(42)->fontWeight('bold'),
-            Text($this->summary),
+            Text($this->state('count')),
             Button('Add one')
-                ->onClick(ClientAction::increment('count'))
+                ->increments('count')
                 ->loadingLabel('Updating…'),
         )->gap(16)->padding(40);
     }
 }
 ```
+
+The common path intentionally needs neither `StateRef` nor `ClientAction`.
+Use `$this->state('property')` to keep displayed values reactive, then attach
+simple actions with `increments()`, `decrements()`, `sets()` or `toggles()`.
+The lower-level Engine APIs remain available for sequences, transactions and
+other advanced behavior.
 
 ## Bound and validated forms
 
@@ -76,8 +75,8 @@ final class ContactPage extends Page
     public function body(): View
     {
         return Form(
-            Input('email', 'email')
-                ->bindClient('email')
+            EmailInput('email')
+                ->model($this->state('email'))
                 ->required('Your email is required.')
                 ->email(),
             Button('Send')->onClick(

@@ -2,6 +2,16 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.7 — 2026-10-07
+
+- add `$this->state('property')` as a safe, validated shorthand for reactive
+  component state;
+- add `increments()`, `decrements()`, `sets()` and `toggles()` element actions;
+- add the `TextField()` factory and concise `model()` control modifier;
+- allow `Button()` and `Action()` to receive an optional client instruction as
+  their second argument;
+- keep `StateRef` and `ClientAction` fully compatible for advanced use cases.
+
 ## 0.1.0-beta.6 — 2026-09-26
 
 - add native semantic, typography, form, list, table, link and media factories;

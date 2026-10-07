@@ -483,12 +483,40 @@ class Element implements View
         return $this->onClick(ClientAction::increment($property, $by));
     }
 
+    public function increments(string $state, int|float $by = 1): static
+    {
+        return $this->onClick(ClientAction::increment($state, $by));
+    }
+
+    public function decrements(string $state, int|float $by = 1): static
+    {
+        return $this->onClick(ClientAction::decrement($state, $by));
+    }
+
+    public function sets(string $state, mixed $value): static
+    {
+        return $this->onClick(ClientAction::set($state, $value));
+    }
+
+    public function toggles(string $state): static
+    {
+        return $this->onClick(ClientAction::toggle($state));
+    }
+
     public function bindClient(string $property): static
     {
         $property = StateNamespace::qualify($property);
         return $this
             ->attribute('data-aml-model', $property)
             ->attribute('data-aml-bind', $property);
+    }
+
+    public function model(string|StateRef $state): static
+    {
+        [$name] = self::reactiveState($state);
+        return $this
+            ->attribute('data-aml-model', $name)
+            ->attribute('data-aml-bind', $name);
     }
 
     public function required(string $message = 'This field is required.'): static

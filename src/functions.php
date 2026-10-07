@@ -825,14 +825,15 @@ function TableColumn(int $span = 1): Element
     return (new Element('col'))->attribute('span', $span === 1 ? null : $span);
 }
 
-function Action(string|Closure $label): Element
+function Action(string|Closure $label, ?ClientInstruction $action = null): Element
 {
-    return (new Element('button', textValue($label)))->attribute('type', 'button');
+    $button = (new Element('button', textValue($label)))->attribute('type', 'button');
+    return $action === null ? $button : $button->onClick($action);
 }
 
-function Button(string|Closure $label): Element
+function Button(string|Closure $label, ?ClientInstruction $action = null): Element
 {
-    return Action($label);
+    return Action($label, $action);
 }
 
 function Form(View ...$children): Element
@@ -853,6 +854,11 @@ function Input(string $name, string $type = 'text', string|int|float|null $value
         ->attribute('name', $name)
         ->attribute('type', $type)
         ->attribute('value', $value);
+}
+
+function TextField(string $name, string|int|float|null $value = null): Element
+{
+    return Input($name, 'text', $value);
 }
 
 function EmailInput(string $name, string $value = ''): Element

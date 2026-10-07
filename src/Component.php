@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AML\View;
 
 use AML\Engine\ClientInstruction;
+use AML\Engine\StateRef;
 use AML\Engine\EffectPlan;
 use AML\Engine\Effects;
 use AML\Engine\StateNamespace;
@@ -15,6 +16,32 @@ abstract class Component implements View
     private array $computedValues = [];
 
     abstract public function body(): View;
+
+    /**
+     * Reference one of this component's #[State] properties from the client UI.
+     *
+     * This is the concise equivalent of StateRef::to('name', $this->name). It
+     * deliberately accepts a property name instead of a raw value so the
+     * browser keeps the reactive connection after the initial PHP render.
+     */
+    final protected function state(string $name): StateRef
+    {
+        $reflection = new \ReflectionObject($this);
+        if (!$reflection->hasProperty($name)) {
+            throw new \OutOfBoundsException("Unknown AML View state: {$name}");
+        }
+
+        $property = $reflection->getProperty($name);
+        if ($property->isStatic() || $property->getAttributes(State::class) === []) {
+            throw new \LogicException("{$name} must be declared with #[State] before it can be bound.");
+        }
+        if (!$property->isInitialized($this)) {
+            throw new \LogicException("AML View state {$name} must be initialized before it can be bound.");
+        }
+
+        $property->setAccessible(true);
+        return StateRef::to($name, $property->getValue($this));
+    }
 
     final public function render(RenderContext $context): string
     {

@@ -38,6 +38,7 @@ use function AML\View\Input;
 use function AML\View\Link;
 use function AML\View\Slot;
 use function AML\View\Text;
+use function AML\View\TextField;
 use function AML\View\ThemeProvider;
 use function AML\View\ThemeSwitcher;
 use function AML\View\VStack;
@@ -213,7 +214,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.6', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.7', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -584,6 +585,71 @@ check('Client state emits no server event identifier', function () use ($rendere
     };
     $html = $renderer->render($page);
     expect(str_contains($html, 'data-aml-client-click') && !str_contains($html, 'data-aml-click='), 'A server event leaked into client HTML.');
+});
+
+check('Concise state and button APIs preserve reactive client behavior', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 2;
+        #[State] public bool $enabled = false;
+
+        public function body(): View {
+            return VStack(
+                Text($this->state('count')),
+                Button('Add')->increments('count'),
+                Button('Remove')->decrements('count', 2),
+                Button('Reset')->sets('count', 0),
+                Button('Toggle')->toggles('enabled'),
+                Button('Advanced', ClientAction::increment('count', 3)),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, 'data-aml-bind="count"'), 'The concise state helper did not create a reactive binding.');
+    foreach (['&quot;type&quot;:&quot;increment&quot;', '&quot;type&quot;:&quot;decrement&quot;', '&quot;type&quot;:&quot;set&quot;', '&quot;type&quot;:&quot;toggle&quot;'] as $action) {
+        expect(str_contains($html, $action), "Missing concise client action: {$action}");
+    }
+    expect(str_contains($html, '&quot;value&quot;:3'), 'The optional Button action was not rendered.');
+});
+
+check('Concise state helper rejects unmarked properties and unknown names', function () use ($renderer): void {
+    $unmarked = new class extends Page {
+        public int $count = 0;
+        public function body(): View { return Text($this->state('count')); }
+    };
+    try {
+        $renderer->render($unmarked);
+        throw new RuntimeException('An unmarked property was accepted as reactive state.');
+    } catch (LogicException $error) {
+        expect(str_contains($error->getMessage(), '#[State]'), 'The unmarked-state error is not actionable.');
+    }
+
+    $unknown = new class extends Page {
+        public function body(): View { return Text($this->state('missing')); }
+    };
+    try {
+        $renderer->render($unknown);
+        throw new RuntimeException('An unknown state property was accepted.');
+    } catch (OutOfBoundsException $error) {
+        expect(str_contains($error->getMessage(), 'missing'), 'The unknown-state error omits the property name.');
+    }
+});
+
+check('Concise form binding keeps controls connected to typed state', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $name = 'André';
+        public function body(): View {
+            return Form(TextField('name')->model($this->state('name')));
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(
+        str_contains($html, '<input name="name" type="text"')
+        && str_contains($html, 'data-aml-model="name"')
+        && str_contains($html, 'data-aml-bind="name"'),
+        'The concise text field binding is incomplete.',
+    );
 });
 
 check('Shared and persisted state emit a frontend configuration', function () use ($renderer): void {

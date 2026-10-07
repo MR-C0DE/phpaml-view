@@ -11,13 +11,16 @@
 ## State and validation
 
 - `#[State]`: exposes a typed initial value to PHPAML Engine.
+- `$this->state('property')`: creates a validated reactive reference without
+  importing or manually initializing `StateRef`.
 - `#[Shared('key')]`: synchronizes state across mounted pages/components.
 - `#[Persisted(storage, key, version, expiresAfter, migrations)]`: restores versioned,
   optionally expiring browser state.
 - `#[Computed]`: caches a parameterless method for one server render. Supplying
   `dependencies`, `operation` and optionally `separator` also declares its safe
   frontend recalculation.
-- `bindClient('property')`: binds a control to frontend state.
+- `model($this->state('property'))`: concise typed control binding.
+- `bindClient('property')`: lower-level string-based control binding.
 - `required()`, `email()`, `minLength()`: synchronous frontend validation.
 - `validateWith(ApiAction $request, ...)`: explicit asynchronous validation.
 
