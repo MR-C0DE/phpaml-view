@@ -2,6 +2,13 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.8 — 2026-10-07
+
+- support safe `plus()` and `minus()` state expressions in `sets()` actions;
+- let buttons derive a new value from current state without specialized
+  increment/decrement actions;
+- retain all existing action shortcuts and advanced Engine APIs.
+
 ## 0.1.0-beta.7 — 2026-10-07
 
 - add `$this->state('property')` as a safe, validated shorthand for reactive

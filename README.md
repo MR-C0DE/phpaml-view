@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.7`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.8`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
@@ -50,17 +50,21 @@ final class CounterPage extends Page
         return VStack(
             Heading('AML View')->fontSize(42)->fontWeight('bold'),
             Text($this->state('count')),
+            Button('Remove one')
+                ->sets('count', $this->state('count')->minus(1)),
             Button('Add one')
-                ->increments('count')
-                ->loadingLabel('Updating…'),
+                ->sets('count', $this->state('count')->plus(1)),
         )->gap(16)->padding(40);
     }
 }
 ```
 
 The common path intentionally needs neither `StateRef` nor `ClientAction`.
-Use `$this->state('property')` to keep displayed values reactive, then attach
-simple actions with `increments()`, `decrements()`, `sets()` or `toggles()`.
+Use `$this->state('property')` to keep displayed values reactive. Safe
+`plus()` and `minus()` expressions let `sets()` derive a new value from the
+current state without JavaScript or executable serialized callbacks. The
+existing `increments()`, `decrements()` and `toggles()` shortcuts remain
+available for compatibility.
 The lower-level Engine APIs remain available for sequences, transactions and
 other advanced behavior.
 

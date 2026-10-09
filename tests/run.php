@@ -214,7 +214,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.7', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.8', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -595,6 +595,8 @@ check('Concise state and button APIs preserve reactive client behavior', functio
         public function body(): View {
             return VStack(
                 Text($this->state('count')),
+                Button('Plus')->sets('count', $this->state('count')->plus(1)),
+                Button('Minus')->sets('count', $this->state('count')->minus(1)),
                 Button('Add')->increments('count'),
                 Button('Remove')->decrements('count', 2),
                 Button('Reset')->sets('count', 0),
@@ -606,6 +608,7 @@ check('Concise state and button APIs preserve reactive client behavior', functio
 
     $html = $renderer->render($page);
     expect(str_contains($html, 'data-aml-bind="count"'), 'The concise state helper did not create a reactive binding.');
+    expect(str_contains($html, '&quot;$expression&quot;') && str_contains($html, '&quot;operation&quot;:&quot;add&quot;') && str_contains($html, '&quot;operation&quot;:&quot;subtract&quot;'), 'Safe arithmetic state expressions were not rendered.');
     foreach (['&quot;type&quot;:&quot;increment&quot;', '&quot;type&quot;:&quot;decrement&quot;', '&quot;type&quot;:&quot;set&quot;', '&quot;type&quot;:&quot;toggle&quot;'] as $action) {
         expect(str_contains($html, $action), "Missing concise client action: {$action}");
     }

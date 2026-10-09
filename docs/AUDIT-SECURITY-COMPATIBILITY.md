@@ -49,7 +49,7 @@ Last regression validation: 2026-09-26
 ## Compatibility
 
 - PHP requirement: PHP 8.2 or newer.
-- AML View `0.1.0-beta.7` is validated with PHPAML Engine `0.1.0-beta.4`.
+- AML View `0.1.0-beta.8` is validated with PHPAML Engine `0.1.0-beta.5`.
 - The engine requires standard modern browser features including modules of the
   DOM, `fetch`, `AbortController`, `MutationObserver`, Web Storage and optional
   IndexedDB for states that explicitly select it.
