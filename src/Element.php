@@ -151,6 +151,9 @@ class Element implements View
 
     public function value(string|int|float|bool|StateRef|null $value): static
     {
+        if (is_scalar($value) || $value === null) {
+            $value = NaturalStateBindings::resolve('value', $value);
+        }
         $initial = $value instanceof StateRef ? $value->initial : $value;
         if ($value instanceof StateRef) {
             if ($this->tag === 'input' && strtolower((string) ($this->attributes['type'] ?? 'text')) === 'file') {

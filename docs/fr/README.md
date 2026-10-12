@@ -84,6 +84,19 @@ Text('Compteur : {count}');
 Text('Bonjour {profile.name}');
 ```
 
+Une propriété `#[State]` peut aussi être passée directement à l'affichage ou à
+un champ de formulaire :
+
+```php
+Text($this->compteur);
+Input()->value($this->nom);
+```
+
+Le premier reste réactif et le second crée automatiquement une liaison dans les
+deux sens. Une propriété PHP sans `#[State]` reste une valeur serveur ordinaire.
+PHPAML détermine la propriété depuis le code source et ne la devine jamais en
+comparant deux valeurs identiques.
+
 Le nom racine doit correspondre à une propriété `#[State]`. Les chemins
 imbriqués restent échappés et réactifs. Pour afficher littéralement
 `{count}`, utilisez `Text('Exemple : {{count}}')`.

@@ -64,6 +64,9 @@ final class FileApplication
 
     public function styles(): string
     {
+        // Discovery loads view files and records their top-level import()
+        // declarations before the deterministic application bundle is built.
+        $this->discover();
         $files = [];
         foreach ([$this->source . '/stylesheets', $this->source . '/themes'] as $root) {
             if (!is_dir($root)) {
@@ -88,6 +91,23 @@ final class FileApplication
             }
         }
         return implode("\n\n", $styles) . ($styles === [] ? '' : "\n");
+    }
+
+    /**
+     * Return stylesheet ownership using source-relative PHP filenames.
+     *
+     * @return array<string, list<string>>
+     */
+    public function stylesheetImports(): array
+    {
+        $this->discover();
+        $imports = [];
+        foreach (StylesheetImports::forSource($this->source) as $owner => $stylesheets) {
+            $relative = ltrim(str_replace('\\', '/', substr($owner, strlen($this->source))), '/');
+            $imports[$relative] = $stylesheets;
+        }
+        ksort($imports);
+        return $imports;
     }
 
     public function loading(string $path): ?string
@@ -201,7 +221,7 @@ final class FileApplication
             if (!is_file($file)) {
                 continue;
             }
-            require_once $file;
+            $this->loadViewFile($file);
             $class = $this->specialClass($candidate, $name);
             if (!is_subclass_of($class, Page::class)) {
                 throw new \UnexpectedValueException("{$file} must declare {$class} as an AML View page.");
@@ -235,7 +255,7 @@ final class FileApplication
             $pageFile = $file->getPathname();
             $directory = trim(str_replace('\\', '/', substr(dirname($pageFile), strlen($pagesRoot))), '/');
             $pattern = $directory === 'home' ? '/' : '/' . $directory;
-            require_once $pageFile;
+            $this->loadViewFile($pageFile);
             $pageClass = $this->pageClass($directory);
             if (!is_subclass_of($pageClass, Page::class)) {
                 throw new \UnexpectedValueException("{$pageFile} must declare {$pageClass} as an AML View page.");
@@ -276,7 +296,7 @@ final class FileApplication
             }
         }
         sort($files);
-        foreach ($files as $file) require_once $file;
+        foreach ($files as $file) $this->loadViewFile($file);
     }
 
     /** @param list<string> $segments @return list<class-string<Layout>> */
@@ -297,7 +317,7 @@ final class FileApplication
             if (!is_file($file)) {
                 continue;
             }
-            require_once $file;
+            $this->loadViewFile($file);
             $class = $this->layoutClass($candidate);
             if (!is_subclass_of($class, Layout::class)) {
                 throw new \UnexpectedValueException("{$file} must declare {$class} as an AML View layout.");
@@ -344,6 +364,16 @@ final class FileApplication
     {
         $value = ltrim(trim($value, '[]'), '.');
         return str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $value)));
+    }
+
+    private function loadViewFile(string $file): void
+    {
+        StylesheetImports::enter($this->source, $file);
+        try {
+            require_once $file;
+        } finally {
+            StylesheetImports::leave();
+        }
     }
 
 }

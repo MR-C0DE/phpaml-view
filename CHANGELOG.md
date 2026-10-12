@@ -2,6 +2,16 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.11 — 2026-10-12
+
+- Allow every `#[State]` property to bind directly through
+  `Text($this->value)` and `Input()->value($this->value)`, while ordinary PHP
+  properties remain static and existing explicit state APIs remain compatible.
+- Add top-level `import('pages/home.css')` declarations that securely associate
+  local stylesheets with their page, component, layout, or state source file.
+- Keep the existing deterministic global stylesheet bundle for navigation and
+  backwards compatibility while exposing deduplicated ownership metadata.
+
 ## 0.1.0-beta.10 — 2026-10-12
 
 - Allow hook-style `Effect(function () {...})` closures to emit the explicitly

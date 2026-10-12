@@ -224,7 +224,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.10', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.11', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -656,6 +656,61 @@ check('Text rejects unknown reactive placeholders inside a component', function 
     } catch (OutOfBoundsException $error) {
         expect(str_contains($error->getMessage(), '{missing}'), 'The interpolation error omits the unknown placeholder.');
     }
+});
+
+check('direct state properties bind naturally in text and form values', function () use ($renderer): void {
+    $component = new class extends Component {
+        #[State] private string $inputValue = 'b';
+        private string $ordinaryValue = 'static';
+
+        public function body(): View
+        {
+            return Group(
+                Text($this->inputValue),
+                Input()->value($this->inputValue),
+                Text($this->ordinaryValue),
+            );
+        }
+    };
+    $html = $renderer->render($component);
+    expect(preg_match('/data-aml-bind="[^"]*inputValue"/', $html) === 1, 'A direct #[State] text property was not made reactive.');
+    expect(preg_match('/data-aml-model="[^"]*inputValue"/', $html) === 1, 'A direct #[State] form value was not bound bidirectionally.');
+    expect(str_contains($html, '>static</span>'), 'An ordinary PHP property did not remain static.');
+});
+
+check('natural state binding identifies equal values and numeric states by source property', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] private int $first = 0;
+        #[State] private int $second = 0;
+
+        public function body(): View
+        {
+            return Group(Text($this->first), Text($this->second), Input()->value($this->second));
+        }
+    };
+    $html = $renderer->render($page);
+    expect(str_contains($html, 'data-aml-bind="first"'), 'The first equal-valued state was not identified from its PHP property.');
+    expect(substr_count($html, 'data-aml-bind="second"') === 2, 'The second equal-valued state was not identified consistently.');
+    expect(str_contains($html, 'data-aml-model="second"'), 'The numeric state was not bound to the form control.');
+});
+
+check('natural state binding works through component helpers and nullable states', function () use ($renderer): void {
+    $component = new class extends Component {
+        #[State] private ?string $name = null;
+
+        private function field(): View
+        {
+            return Group(Text($this->name), Input()->value($this->name));
+        }
+
+        public function body(): View
+        {
+            return $this->field();
+        }
+    };
+    $html = $renderer->render($component);
+    expect(preg_match('/data-aml-bind="[^"]*name"/', $html) === 1, 'A nullable state read in a component helper was not reactive.');
+    expect(preg_match('/data-aml-model="[^"]*name"/', $html) === 1, 'A nullable state form binding in a component helper was not reactive.');
 });
 
 check('Frontend closures compile basic state mutations without executing PHP', function () use ($renderer): void {
@@ -1796,6 +1851,58 @@ PHP);
         expect($error->getMessage() === 'lazy-state-loaded', 'The route state endpoint did not load the requested state.');
     } finally {
         unset($_SERVER['HTTP_X_AML_NAVIGATION_STATE']);
+    }
+});
+
+check('top-level import associates safe stylesheets with view files', function (): void {
+    $root = sys_get_temp_dir() . '/aml-view-imports-' . bin2hex(random_bytes(5));
+    mkdir($root . '/pages/home', 0777, true);
+    mkdir($root . '/components', 0777, true);
+    mkdir($root . '/stylesheets/pages', 0777, true);
+    mkdir($root . '/stylesheets/components', 0777, true);
+    file_put_contents($root . '/stylesheets/pages/home.css', '.home { color: navy; }');
+    file_put_contents($root . '/stylesheets/components/badge.css', '.badge { font-weight: bold; }');
+    file_put_contents($root . '/components/Badge.php', <<<'PHP'
+<?php
+namespace ImportFixtures\Components;
+use function AML\View\import;
+import('components/badge.css');
+final class Badge extends \AML\View\Component {
+    public function body(): \AML\View\View { return \AML\View\Text('Badge'); }
+}
+PHP);
+    file_put_contents($root . '/pages/home/page.php', <<<'PHP'
+<?php
+namespace ImportFixtures\Pages\Home;
+use function AML\View\import;
+import('pages/home.css');
+import('pages/home.css');
+final class HomePage extends \AML\View\Page {
+    public function body(): \AML\View\View { return \AML\View\Text('Home'); }
+}
+PHP);
+
+    $application = new FileApplication($root, namespace: 'ImportFixtures');
+    expect($application->stylesheetImports() === [
+        'components/Badge.php' => ['components/badge.css'],
+        'pages/home/page.php' => ['pages/home.css'],
+    ], 'Stylesheet imports were not associated or deduplicated correctly.');
+    $styles = $application->styles();
+    expect(str_contains($styles, '.home') && str_contains($styles, '.badge'), 'Imported stylesheets are missing from the application bundle.');
+});
+
+check('top-level import rejects missing and unsafe stylesheets', function (): void {
+    foreach (['missing.css', '../secret.css', 'https://example.com/app.css', 'pages/app.js'] as $path) {
+        $root = sys_get_temp_dir() . '/aml-view-import-reject-' . bin2hex(random_bytes(5));
+        mkdir($root . '/pages/home', 0777, true);
+        mkdir($root . '/stylesheets', 0777, true);
+        $namespace = 'RejectedImport' . bin2hex(random_bytes(4));
+        file_put_contents($root . '/pages/home/page.php', "<?php\nnamespace {$namespace}\\Pages\\Home;\n\\AML\\View\\import(" . var_export($path, true) . ");\nfinal class HomePage extends \\AML\\View\\Page { public function body(): \\AML\\View\\View { return \\AML\\View\\Text('Home'); } }\n");
+        try {
+            (new FileApplication($root, namespace: $namespace))->stylesheetImports();
+            throw new RuntimeException("Unsafe stylesheet import was accepted: {$path}");
+        } catch (InvalidArgumentException) {
+        }
     }
 });
 

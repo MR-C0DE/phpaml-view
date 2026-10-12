@@ -17,6 +17,18 @@ Text('Count: {count}');
 Text('User: {profile.name}');
 ```
 
+It also recognizes a direct `#[State]` property and keeps its typed value
+reactive without a placeholder or explicit reference:
+
+```php
+Text($this->count);
+Input()->value($this->name);
+```
+
+The second form is a two-way form binding. An unmarked PHP property remains a
+normal server-rendered value. The association is compiled from the PHP source;
+it is never guessed by comparing runtime values.
+
 The root name must refer to a `#[State]` property. Values are rendered on the
 server, escaped, and kept reactive by AML Engine. Doubled braces such as
 `{{count}}` render a literal `{count}`.
@@ -61,8 +73,10 @@ supported state mutations.
 - `#[State]`: exposes a typed initial value to PHPAML Engine.
 - `$this->state('property')`: creates a validated reactive reference without
   importing or manually initializing `StateRef`.
-- `value($this->state('property'))`: explicitly connects a form control to
-  reactive state; scalar values remain ordinary non-reactive HTML values.
+- `value($this->property)`: naturally connects a direct `#[State]` property to
+  reactive state; unmarked scalar properties remain ordinary HTML values.
+- `value($this->state('property'))`: explicit equivalent retained for advanced
+  expressions and backwards compatibility.
 - `name()`, `type()`, `placeholder()`, `autocomplete()`, `autofocus()`,
   `pattern()`, `inputMode()`, `min()`, `max()` and `step()` expose safe native
   field attributes fluently.

@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.10`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.11`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
@@ -47,7 +47,7 @@ final class CounterPage extends Page
     {
         return VStack(
             Heading('AML View')->fontSize(42)->fontWeight('bold'),
-            Text($this->state('count')),
+            Text($this->count),
             Button('Remove one')
                 ->sets('count', $this->state('count')->minus(1)),
             Button('Add one')
@@ -58,7 +58,16 @@ final class CounterPage extends Page
 ```
 
 The common path intentionally needs neither `StateRef` nor `ClientAction`.
-Use `$this->state('property')` to keep displayed values reactive. Safe
+Passing a `#[State]` property directly to `Text()` keeps it reactive. Passing it
+directly to a form control's `value()` creates a two-way binding:
+
+```php
+Text($this->name);
+Input()->value($this->name);
+```
+
+Ordinary unmarked PHP properties remain static. The explicit
+`$this->state('property')` API remains available for expressions. Safe
 `plus()` and `minus()` expressions let `sets()` derive a new value from the
 current state without JavaScript or executable serialized callbacks. The
 existing `increments()`, `decrements()` and `toggles()` shortcuts remain
@@ -802,6 +811,28 @@ that bundle at `/_aml/styles.css`, keeping `public/` limited to the entry point
 and static assets. Application images and media belong in `public/assets`.
 Documents that require a direct top-level URL—such as the logo, favicon,
 `robots.txt`, and `sitemap.xml`—stay at the root of `public`.
+
+Declare which stylesheet belongs to a page or component with one top-level
+`import()` outside the class. Its path is relative to `src/views/stylesheets`:
+
+```php
+use function AML\View\{import, MainContent, Text};
+
+import('pages/home.css');
+
+final class HomePage extends Page
+{
+    public function body(): View
+    {
+        return MainContent(Text('Home'))->class('home-page');
+    }
+}
+```
+
+`import()` accepts local `.css` files only, rejects traversal and remote URLs,
+and deduplicates repeated declarations. `class()` remains responsible for
+applying a stylesheet class to an element. The application keeps one global,
+deterministic bundle so navigation never flashes or reloads page styles.
 
 ```php
 $app = new FileApplication(__DIR__ . '/../src/views');

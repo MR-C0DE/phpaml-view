@@ -12,13 +12,25 @@ use AML\Engine\ClientInstruction;
 use AML\Engine\NavigationAction;
 use Closure;
 
+/**
+ * Associate a stylesheet with the page, component, layout, or state file that
+ * declares it. Paths are relative to src/views/stylesheets.
+ */
+function import(string $path): void
+{
+    StylesheetImports::add($path);
+}
+
 function textValue(string|Closure $value): View
 {
     return new TextView($value);
 }
 
-function Text(string|Closure|StateRef|StateExpression|StateConditional $content): Element
+function Text(string|int|float|bool|Closure|StateRef|StateExpression|StateConditional|null $content): Element
 {
+    if (is_scalar($content) || $content === null) {
+        $content = NaturalStateBindings::resolve('Text', $content);
+    }
     if ($content instanceof StateRef) {
         return (new Element('span', new TextView((string) ($content->initial ?? ''))))
             ->attribute('data-aml-bind', $content->name);
@@ -57,7 +69,7 @@ function Text(string|Closure|StateRef|StateExpression|StateConditional $content)
             $content = str_replace(['{{', '}}'], ['{', '}'], $content);
         }
     }
-    return new Element('span', textValue($content));
+    return new Element('span', textValue($content instanceof Closure ? $content : (string) ($content ?? '')));
 }
 
 /** @internal */

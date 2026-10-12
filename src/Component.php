@@ -49,6 +49,7 @@ abstract class Component implements View
         $previous = $this instanceof Page ? StateNamespace::suspend() : null;
         $scope = $this instanceof Page ? null : StateNamespace::enter(static::class);
         StateInterpolation::enter($this->interpolatedStates());
+        NaturalStateBindings::enter($this);
         InlineEffectRegistry::enter();
         InlineStateRegistry::enter();
         try {
@@ -58,6 +59,7 @@ abstract class Component implements View
         } finally {
             InlineStateRegistry::leave();
             InlineEffectRegistry::leave();
+            NaturalStateBindings::leave();
             StateInterpolation::leave();
             if ($scope !== null) StateNamespace::leave();
             elseif ($previous !== null) StateNamespace::restore($previous);
