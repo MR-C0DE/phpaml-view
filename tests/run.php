@@ -224,7 +224,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.9', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.10', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',

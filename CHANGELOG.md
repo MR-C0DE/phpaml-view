@@ -2,7 +2,7 @@
 
 All notable changes follow Semantic Versioning.
 
-## Unreleased
+## 0.1.0-beta.10 — 2026-10-12
 
 - Allow hook-style `Effect(function () {...})` closures to emit the explicitly
   allowlisted `Console::log()`, `Console::warning()` and `Console::error()`
