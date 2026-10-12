@@ -340,6 +340,18 @@ public function body(): View
 
 Ces appels doivent rester inconditionnels. La classe d'attribut `Effect` et la
 fonction `Effect()` peuvent être importées ensemble en PHP.
+La closure sécurisée accepte aussi directement la façade de console :
+
+```php
+use AML\View\Console;
+
+Effect(function (): void {
+    Console::log('Nouveau compteur', $this->compteur);
+}, [$this->state('compteur')], runOnMount: false);
+```
+
+Seuls `Console::log()`, `Console::warning()` et `Console::error()` sont
+autorisés comme appels statiques. Les autres appels PHP restent refusés.
 
 ### État automatique d'une action
 

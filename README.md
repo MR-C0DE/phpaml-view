@@ -607,6 +607,18 @@ public function body(): View
 PHP keeps class and function imports in separate symbol tables, so the
 `#[Effect]` attribute and `Effect()` function can coexist in the same file.
 As with React Hooks, keep hook-style calls unconditional and before `return`.
+The safe closure subset also accepts the browser-console facade directly:
+
+```php
+use AML\View\Console;
+
+Effect(function (): void {
+    Console::log('New counter value', $this->counter);
+}, [$this->state('counter')], runOnMount: false);
+```
+
+Only `Console::log()`, `Console::warning()` and `Console::error()` are allowed
+as static calls. PHP methods and arbitrary static calls remain rejected.
 
 ### Action status without manual state
 

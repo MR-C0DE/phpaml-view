@@ -2,6 +2,12 @@
 
 All notable changes follow Semantic Versioning.
 
+## Unreleased
+
+- Allow hook-style `Effect(function () {...})` closures to emit the explicitly
+  allowlisted `Console::log()`, `Console::warning()` and `Console::error()`
+  browser actions while continuing to reject arbitrary static PHP calls.
+
 ## 0.1.0-beta.9 — 2026-10-12
 
 - Added safe reactive state interpolation in `Text()`, including nested paths

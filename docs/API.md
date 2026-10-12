@@ -291,6 +291,8 @@ accepts the request CSP nonce through `render($nonce)`.
   concurrency: 'latest')` registers a hook-style effect before `body()` returns.
   Keep these calls unconditional. PHP permits the `Effect` class and function
   imports to coexist; they occupy separate symbol tables.
+- Natural hook closures may emit `Console::log()`, `Console::warning()` and
+  `Console::error()`. No other static PHP calls are compiled.
 - `ActionState($closureOrInstruction)` returns an executable action exposing
   reactive `pending`, `success`, and `error` state references.
 - `FormState()` returns `dirty`, `touched`, `valid`, `invalid`, `submitting`,

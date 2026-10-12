@@ -1534,6 +1534,51 @@ check('Effect registers a React-style hook before the body return', function () 
     expect(str_contains($html, '&quot;debounce&quot;:200'), 'The hook debounce setting is missing.');
 });
 
+check('Effect compiles allowlisted Console calls from natural PHP', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public int $counter = 0;
+
+        public function body(): View
+        {
+            InlineEffect(function (): void {
+                Console::log('Nouveau compteur', $this->counter);
+                Console::warning('Attention', $this->counter + 1);
+                Console::error('Erreur simulée');
+            }, [$this->state('counter')], runOnMount: false);
+
+            return Text('{counter}');
+        }
+    };
+
+    $html = $renderer->render($component);
+    expect(substr_count($html, '&quot;type&quot;:&quot;console&quot;') === 3, 'Natural Console calls were not compiled.');
+    expect(str_contains($html, '&quot;level&quot;:&quot;log&quot;'), 'Console::log is missing from the effect.');
+    expect(str_contains($html, '&quot;level&quot;:&quot;warn&quot;'), 'Console::warning is missing from the effect.');
+    expect(str_contains($html, '&quot;level&quot;:&quot;error&quot;'), 'Console::error is missing from the effect.');
+    expect(str_contains($html, '&quot;$state&quot;:&quot;counter&quot;'), 'The reactive Console value is missing.');
+});
+
+check('Frontend closures continue to reject arbitrary static calls', function (): void {
+    $component = new class extends Page {
+        #[State] public int $counter = 0;
+
+        public function body(): View
+        {
+            InlineEffect(function (): void {
+                DateTime::createFromFormat('U', $this->counter);
+            }, [$this->state('counter')]);
+
+            return Text('{counter}');
+        }
+    };
+
+    ViewTest::assertThrows(
+        static fn () => ViewTest::render($component),
+        \InvalidArgumentException::class,
+        'Frontend statements must assign or update a #[State] property through $this.',
+    );
+});
+
 check('#[Effect] rejects unusable declarations', function (): void {
     try {
         new Effect(concurrency: 'unsafe');

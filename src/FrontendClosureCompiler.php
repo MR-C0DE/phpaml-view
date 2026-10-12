@@ -224,6 +224,9 @@ final class FrontendClosureCompiler
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
     private static function statement(array $tokens, array $states, array &$locals): ?ClientInstruction
     {
+        $console = self::consoleCall($tokens, $states, $locals);
+        if ($console !== null) return $console;
+
         if (($tokens[0]['id'] ?? null) === T_STRING && in_array(strtolower($tokens[0]['text']), ['array_pop', 'array_shift'], true)) {
             if (count($tokens) !== 6 || $tokens[1]['text'] !== '(' || $tokens[2]['id'] !== T_VARIABLE
                 || $tokens[2]['text'] !== '$this' || $tokens[3]['id'] !== T_OBJECT_OPERATOR
@@ -273,6 +276,52 @@ final class FrontendClosureCompiler
         if ($operator === T_MOD_EQUAL) return ClientAction::set($name, $states[$name]->modulo($value));
         if ($operator === T_CONCAT_EQUAL) return ClientAction::set($name, $states[$name]->concat($value));
         throw new \InvalidArgumentException("Unsupported frontend state operator for {$name}.");
+    }
+
+    /**
+     * Compile only the explicitly supported browser-console facade. Static
+     * calls to every other PHP class remain unavailable in frontend closures.
+     *
+     * @param list<array{id: int|string, text: string}> $tokens
+     * @param array<string, StateRef> $states
+     * @param array<string, mixed> $locals
+     */
+    private static function consoleCall(array $tokens, array $states, array $locals): ?ClientInstruction
+    {
+        if (($tokens[0]['id'] ?? null) !== T_STRING || strtolower($tokens[0]['text']) !== 'console') {
+            return null;
+        }
+        if (($tokens[1]['id'] ?? null) !== T_DOUBLE_COLON || ($tokens[2]['id'] ?? null) !== T_STRING
+            || ($tokens[3]['text'] ?? null) !== '(' || ($tokens[array_key_last($tokens)]['text'] ?? null) !== ')') {
+            throw new \InvalidArgumentException('Frontend Console calls must use Console::log(), Console::warning(), or Console::error().');
+        }
+
+        $method = strtolower($tokens[2]['text']);
+        if (!in_array($method, ['log', 'warning', 'error'], true)) {
+            throw new \InvalidArgumentException("Unsupported frontend Console method: {$tokens[2]['text']}");
+        }
+
+        $arguments = [];
+        $argument = [];
+        $depth = 0;
+        foreach (array_slice($tokens, 4, -1) as $token) {
+            if (in_array($token['text'], ['(', '['], true)) $depth++;
+            if (in_array($token['text'], [')', ']'], true)) $depth--;
+            if ($token['text'] === ',' && $depth === 0) {
+                if ($argument === []) throw new \InvalidArgumentException('Frontend Console arguments cannot be empty.');
+                $arguments[] = self::value($argument, $states, $locals);
+                $argument = [];
+                continue;
+            }
+            $argument[] = $token;
+        }
+        if ($argument !== []) $arguments[] = self::value($argument, $states, $locals);
+
+        return match ($method) {
+            'log' => Console::log(...$arguments),
+            'warning' => Console::warning(...$arguments),
+            'error' => Console::error(...$arguments),
+        };
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
