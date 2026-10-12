@@ -2,7 +2,7 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.8`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.9`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
@@ -35,9 +35,7 @@ composer require phpaml/view:^0.1@beta phpaml/engine:^0.1@beta
 ```php
 <?php
 
-use AML\View\Page;
-use AML\View\State;
-use AML\View\View;
+use AML\View\{Page, State, View};
 use function AML\View\{Button, Heading, Text, VStack};
 
 final class CounterPage extends Page
@@ -68,6 +66,121 @@ available for compatibility.
 The lower-level Engine APIs remain available for sequences, transactions and
 other advanced behavior.
 
+Reactive state can also be interpolated into ordinary text without splitting a
+sentence into several view nodes:
+
+```php
+Text('Count: {count}');
+Text('Hello {profile.name}');
+```
+
+Placeholders must resolve to a property marked with `#[State]`. Nested array
+paths are supported and remain HTML-escaped. Use doubled braces when text must
+contain a literal placeholder, for example `Text('Example: {{count}}')`.
+
+Simple frontend mutations can be written as ordinary PHP closures:
+
+```php
+Button('Add')->onClick(function (): void {
+    $this->count++;
+});
+
+Button('Reset')->onClick(function (): void {
+    $this->count = 0;
+});
+```
+
+PHPAML inspects these closures without executing them and compiles the supported
+statements into the same declarative Engine actions shown above. The initial
+subset supports `++`, `--`, assignment, `+=`, `-=`, local variables and the
+arithmetic operators `+`, `-`, `*`, `/` and `%` on `#[State]` properties:
+
+```php
+Button('Calculate')->onClick(function (): void {
+    $subtotal = $this->price * $this->quantity;
+    $this->total = $subtotal - $this->discount;
+});
+```
+
+Normal PHP precedence and parentheses are preserved. Arbitrary PHP calls and unmarked properties are rejected.
+Boolean negation, string concatenation and compound arithmetic are also supported,
+for example `$this->open = !$this->open`, `$this->label = 'Total: ' . $this->total`
+and `$this->quantity *= 2`.
+PHP ternaries remain reactive as well:
+
+```php
+$this->discount = $subtotal >= 100 ? 10 : 0;
+$this->label = $this->enabled ? 'Active' : 'Inactive';
+```
+
+Longer or reusable interactions may be moved into a named component method and
+passed as a first-class PHP callable:
+
+```php
+private function increment(): void
+{
+    $this->count++;
+}
+
+// Inside body()
+Button('Add')->onClick($this->increment(...));
+```
+
+The named method is inspected under the same frontend safety rules and is not
+executed during server rendering.
+
+A single expression can use PHP's concise arrow-function syntax:
+
+```php
+Button('Add')->onClick(fn () => $this->count++);
+Button('Toggle')->onClick(fn () => $this->enabled = !$this->enabled);
+```
+
+Use a braced closure or a named method when the interaction needs multiple
+statements.
+
+Reactive output remains ordinary PHP. Use a validated state reference when the
+browser must recalculate a displayed value:
+
+```php
+Text('Count: {count}');
+Text($this->state('connected')->choose('Welcome', 'Sign in required'));
+Text($this->state('price')->times($this->state('quantity')));
+Text($this->state('count')->prefixedBy('Count: '));
+Text($this->state('count')->concat(' items'));
+```
+
+`choose()` and safe calculations update their text automatically when their
+state dependencies change.
+
+Basic collection changes use familiar PHP syntax inside safe frontend handlers:
+
+```php
+$this->tasks[] = $this->newTask;
+array_pop($this->tasks);
+array_shift($this->tasks);
+```
+
+Only these explicitly supported collection operations are compiled; arbitrary
+PHP function calls remain rejected.
+Keep each frontend closure on its own lines so its source is unambiguous.
+
+Conditions use ordinary PHP syntax and compile to safe Engine branches:
+
+```php
+Button('Evaluate')->onClick(function (): void {
+    if ($this->count >= 10) {
+        $this->message = 'Goal reached';
+    } else {
+        $this->message = 'Keep going';
+    }
+});
+```
+
+The initial condition grammar supports boolean states and comparisons with
+scalar literals, state values or calculated local expressions: `==`, `===`,
+`!=`, `!==`, `>`, `>=`, `<` and `<=`.
+
 ## Bound and validated forms
 
 ```php
@@ -79,8 +192,9 @@ final class ContactPage extends Page
     public function body(): View
     {
         return Form(
-            EmailInput('email')
-                ->model($this->state('email'))
+            EmailInput()
+                ->name('email')
+                ->value($this->state('email'))
                 ->required('Your email is required.')
                 ->email(),
             Button('Send')->onClick(
@@ -93,8 +207,33 @@ final class ContactPage extends Page
 }
 ```
 
+`name()` defines the submitted HTML field name. Passing a state reference to
+`value()` creates the two-way reactive binding; passing a scalar instead keeps
+the field non-reactive. `model()` remains available as the lower-level explicit
+binding API.
+
 PHPAML Engine validates controls locally and again before form submission.
 Invalid controls receive accessible error markup automatically.
+
+Submit and field events use the same restricted frontend PHP closures as
+`onClick()`:
+
+```php
+Form(
+    TextField()
+        ->name('name')
+        ->value($this->state('name'))
+        ->onInput(fn () => $this->editing = true)
+        ->onBlur(fn () => $this->editing = false),
+    Button('Send')->submit(),
+)->onSubmit(function (): void {
+    $this->submitted = true;
+});
+```
+
+Available field events are `onInput()`, `onChange()`, `onFocus()` and
+`onBlur()`. A frontend `onSubmit()` prevents native navigation after successful
+local and remote validation; forms without it retain their normal HTML submit.
 
 Status messages use the singular `Alert` API:
 
@@ -409,9 +548,156 @@ protected function fullName(): string
 ## Declarative effects
 
 `#[Effect]` connects browser-side work to state dependencies without sending a
-click or a state update back to PHP. An effect method returns a declarative AML
-instruction or an `EffectPlan`; PHP closures are never translated into unsafe
-JavaScript.
+click or a state update back to PHP. A `void` method can use the safe natural
+frontend PHP subset and is compiled without being executed on the server:
+
+```php
+#[Effect('search', runOnMount: false, debounce: 250)]
+private function searchChanged(): void
+{
+    if ($this->search === '') {
+        $this->message = 'Enter a search term';
+    } else {
+        $this->message = 'Searching for ' . $this->search;
+    }
+}
+```
+
+Multiple dependencies use `#[Effect(['first', 'last'])]`. Advanced effects may
+still return a declarative AML instruction or an `EffectPlan`; PHP source is
+never translated into arbitrary JavaScript.
+
+For a short effect local to `body()`, use `OnChange()` and keep the named
+attribute form for larger or reusable behavior:
+
+```php
+return VStack(
+    OnChange($this->state('age'), function (): void {
+        $this->category = $this->age < 18 ? 'minor' : 'adult';
+    }),
+    NumberInput()->name('age')->value($this->state('age')),
+    Text('{category}'),
+);
+```
+
+`OnChange()` does not run initially by default. Pass `initial: true` when the
+inline effect must also run on mount. Multiple dependencies are passed as an
+array of state references.
+
+For a React-style hook before the return statement, import the function and
+register it while building `body()`:
+
+```php
+use AML\View\Effect;
+use function AML\View\Effect;
+
+public function body(): View
+{
+    Effect(function (): void {
+        $this->message = 'Search: ' . $this->search;
+    }, [$this->state('search')], runOnMount: false);
+
+    return VStack(
+        TextField()->name('search')->value($this->state('search')),
+        Text('{message}'),
+    );
+}
+```
+
+PHP keeps class and function imports in separate symbol tables, so the
+`#[Effect]` attribute and `Effect()` function can coexist in the same file.
+As with React Hooks, keep hook-style calls unconditional and before `return`.
+
+### Action status without manual state
+
+`ActionState()` wraps a frontend closure or client instruction and supplies
+reactive `pending`, `success`, and `error` references automatically:
+
+```php
+$save = ActionState(Api::post('/api/profile', [
+    'name' => $this->state('name'),
+]));
+
+return Form(
+    TextField()->value($this->state('name')),
+    Button($save->pending->choose('Saving...', 'Save'))
+        ->onClick($save)
+        ->disabledWhen($save->pending),
+    Text($save->error),
+);
+```
+
+Each execution clears the previous error and success state, marks the action as
+pending, then records success or the client error message. No extra `#[State]`
+properties are required.
+
+### Complete form state
+
+`FormState()` tracks the lifecycle of one native form without manual status
+properties:
+
+```php
+$form = FormState();
+
+return Form(
+    EmailInput()
+        ->value($this->state('email'))
+        ->required(),
+
+    Button($form->submitting->choose('Sending...', 'Send'))
+        ->submit()
+        ->disabledWhen($form->invalid),
+
+    Button('Reset')->onClick($form->reset()),
+    Text($form->error),
+)
+    ->state($form)
+    ->onSubmit($form->action(
+        Api::post('/api/contact', ['email' => $this->state('email')]),
+    ));
+```
+
+The handle exposes `dirty`, `touched`, `valid`, `invalid`, `submitting`,
+`submitted`, and `error`. Native and remote validation remain authoritative.
+Resetting the form also restores its bound reactive values.
+
+### Reducers, context and element references
+
+Use `Reducer()` when one value has several named transitions:
+
+```php
+$counter = Reducer(0, [
+    'increment' => fn (StateRef $state) => $state->plus(1),
+    'decrement' => fn (StateRef $state) => $state->minus(1),
+]);
+
+return VStack(
+    Text($counter->state),
+    Button('+')->onClick($counter->dispatch('increment')),
+    Button('-')->onClick($counter->dispatch('decrement')),
+);
+```
+
+`Context()` and `UseContext()` are concise aliases for the existing provider
+and reader contract:
+
+```php
+Context('locale', 'fr-CA', UseContext('locale'));
+```
+
+`Ref()` provides an intentionally small imperative escape hatch. Supported
+operations are `focus`, `blur`, `select`, `play`, and `pause`:
+
+```php
+$search = Ref();
+
+return Group(
+    Input()->ref($search),
+    Button('Focus')->onClick($search->focus()),
+);
+```
+
+Refs never execute arbitrary method names or JavaScript.
 
 ```php
 use AML\Engine\ClientAction;

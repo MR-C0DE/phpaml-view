@@ -48,14 +48,35 @@ abstract class Component implements View
         $this->computedValues = [];
         $previous = $this instanceof Page ? StateNamespace::suspend() : null;
         $scope = $this instanceof Page ? null : StateNamespace::enter(static::class);
+        StateInterpolation::enter($this->interpolatedStates());
+        InlineEffectRegistry::enter();
+        InlineStateRegistry::enter();
         try {
             $html = $this->body()->render($context);
-            $effects = $this->clientEffects($scope);
+            $effects = [...$this->clientEffects($scope), ...InlineEffectRegistry::current()];
+            $inlineState = InlineStateRegistry::current();
         } finally {
+            InlineStateRegistry::leave();
+            InlineEffectRegistry::leave();
+            StateInterpolation::leave();
             if ($scope !== null) StateNamespace::leave();
             elseif ($previous !== null) StateNamespace::restore($previous);
         }
-        return $this->withClientState($html, $scope, $effects);
+        return $this->withClientState($html, $scope, $effects, $inlineState);
+    }
+
+    /** @return array<string, StateRef> */
+    private function interpolatedStates(): array
+    {
+        $states = [];
+        $reflection = new \ReflectionObject($this);
+        foreach ($reflection->getProperties() as $property) {
+            if ($property->isStatic() || $property->getAttributes(State::class) === []) continue;
+            $property->setAccessible(true);
+            if (!$property->isInitialized($this)) continue;
+            $states[$property->getName()] = StateRef::to($property->getName(), $property->getValue($this));
+        }
+        return $states;
     }
 
     /** @return array<string, array<string, mixed>> */
@@ -69,10 +90,22 @@ abstract class Component implements View
                 throw new \LogicException("#[Effect] method {$method->getName()} must not require parameters.");
             }
             $definition = $attribute->newInstance();
-            $result = $method->invoke($this);
-            $plan = $result instanceof ClientInstruction ? Effects::run($result) : $result;
+            $returnType = $method->getReturnType();
+            $naturalFrontendEffect = $returnType instanceof \ReflectionNamedType
+                && $returnType->isBuiltin()
+                && $returnType->getName() === 'void';
+            if ($naturalFrontendEffect) {
+                $closure = $method->getClosure($this);
+                if (!$closure instanceof \Closure) {
+                    throw new \LogicException("Unable to inspect #[Effect] method {$method->getName()}.");
+                }
+                $plan = Effects::run(FrontendClosureCompiler::compile($closure));
+            } else {
+                $result = $method->invoke($this);
+                $plan = $result instanceof ClientInstruction ? Effects::run($result) : $result;
+            }
             if (!$plan instanceof EffectPlan) {
-                throw new \LogicException("#[Effect] method {$method->getName()} must return an EffectPlan or ClientInstruction.");
+                throw new \LogicException("#[Effect] method {$method->getName()} must return void, an EffectPlan or ClientInstruction.");
             }
             $id = ($scope === null ? 'page' : $scope) . '.' . $method->getName();
             $effects[$id] = [
@@ -90,8 +123,11 @@ abstract class Component implements View
         return $effects;
     }
 
-    /** @param array<string, array<string, mixed>> $effects */
-    private function withClientState(string $html, ?string $scope, array $effects): string
+    /**
+     * @param array<string, array<string, mixed>> $effects
+     * @param array<string, mixed> $inlineState
+     */
+    private function withClientState(string $html, ?string $scope, array $effects, array $inlineState): string
     {
         $state = [];
         $config = ['shared' => [], 'persisted' => [], 'types' => [], 'computed' => [], 'effects' => $effects];
@@ -140,6 +176,17 @@ abstract class Component implements View
                 'operation' => $computed->operation,
                 'separator' => $computed->separator,
             ];
+        }
+        foreach ($inlineState as $target => $initial) {
+            $state[$target] = $initial;
+            $config['types'][$target] = match (gettype($initial)) {
+                'integer' => 'int',
+                'double' => 'float',
+                'boolean' => 'bool',
+                'string' => 'string',
+                'array' => 'array',
+                default => 'mixed',
+            };
         }
         if ($state === [] && $effects === []) return $html;
         $json = json_encode($state, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);

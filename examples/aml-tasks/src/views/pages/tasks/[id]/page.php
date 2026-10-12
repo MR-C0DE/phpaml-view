@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace App\Views\Pages\Tasks\Id;
 
 use App\Support\Copy;
-use AML\View\Page;
-use AML\View\PageMetadata;
-use AML\View\View;
+use AML\View\{Page, PageMetadata, View};
 use function AML\View\{Group, Heading, Link, MainContent, Section, Text};
 
 final class IdPage extends Page

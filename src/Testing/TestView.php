@@ -116,7 +116,10 @@ final class TestView
             return;
         }
         if ($type === 'condition') {
-            $current = $this->read((string) ($action['state'] ?? '')); $expected = $action['value'] ?? null;
+            $current = array_key_exists('left', $action)
+                ? $this->resolveValue($action['left'])
+                : $this->read((string) ($action['state'] ?? ''));
+            $expected = $this->resolveValue($action['value'] ?? null);
             $matches = match ($action['operator'] ?? 'eq') {
                 'eq' => $current === $expected, 'neq' => $current !== $expected,
                 'gt' => $current > $expected, 'gte' => $current >= $expected,
@@ -131,7 +134,7 @@ final class TestView
         if ($type === 'navigate') { $this->redirect = (string) ($action['destination'] ?? ''); $this->replace = (bool) ($action['replace'] ?? false); return; }
         $target = (string) ($action['target'] ?? '');
         if ($target === '') throw new TestExpectationFailed("Unsupported AML test action: {$type}");
-        $current = $this->read($target); $value = $action['value'] ?? null;
+        $current = $this->read($target); $value = $this->resolveValue($action['value'] ?? null);
         if (in_array($type, ['append', 'prepend', 'remove-at', 'remove-by', 'update-by', 'sort-by', 'reverse', 'filter-by', 'move', 'merge', 'clear'], true)) {
             $items = is_array($current) ? $current : [];
             if ($type === 'append') $items[] = $value;
@@ -156,6 +159,45 @@ final class TestView
         };
     }
 
+    private function resolveValue(mixed $value): mixed
+    {
+        if (!is_array($value)) return $value;
+        if (isset($value['$state']) && is_string($value['$state'])) return $this->read($value['$state']);
+        if (isset($value['$expression']) && is_array($value['$expression'])) {
+            $expression = $value['$expression'];
+            $left = $this->resolveValue($expression['left'] ?? null);
+            $right = $this->resolveValue($expression['right'] ?? null);
+            return match ($expression['operation'] ?? '') {
+                'add' => (is_numeric($left) ? $left : 0) + (is_numeric($right) ? $right : 0),
+                'subtract' => (is_numeric($left) ? $left : 0) - (is_numeric($right) ? $right : 0),
+                'multiply' => (is_numeric($left) ? $left : 0) * (is_numeric($right) ? $right : 0),
+                'divide' => (is_numeric($right) && (float) $right !== 0.0)
+                    ? (is_numeric($left) ? $left : 0) / $right
+                    : throw new TestExpectationFailed('Division by zero in AML test expression.'),
+                'modulo' => (is_numeric($right) && (float) $right !== 0.0)
+                    ? (is_numeric($left) ? $left : 0) % $right
+                    : throw new TestExpectationFailed('Modulo by zero in AML test expression.'),
+                'concat' => (string) ($left ?? '') . (string) ($right ?? ''),
+                'not' => !(bool) $left,
+                default => throw new TestExpectationFailed('Unsupported AML test expression: ' . ($expression['operation'] ?? '')),
+            };
+        }
+        if (isset($value['$conditional']) && is_array($value['$conditional'])) {
+            $condition = $value['$conditional'];
+            $left = $this->resolveValue($condition['left'] ?? null);
+            $right = $this->resolveValue($condition['right'] ?? null);
+            $matches = match ($condition['operator'] ?? '') {
+                'eq' => $left === $right, 'neq' => $left !== $right,
+                'gt' => $left > $right, 'gte' => $left >= $right,
+                'lt' => $left < $right, 'lte' => $left <= $right,
+                'truthy' => (bool) $left, 'falsy' => !(bool) $left,
+                default => throw new TestExpectationFailed('Unsupported AML test condition value.'),
+            };
+            return $this->resolveValue($matches ? ($condition['then'] ?? null) : ($condition['otherwise'] ?? null));
+        }
+        return array_map(fn (mixed $item): mixed => $this->resolveValue($item), $value);
+    }
+
     private function valueAt(mixed $value, string $path): mixed
     {
         foreach (explode('.', $path) as $segment) { if (!is_array($value) || !array_key_exists($segment, $value)) return null; $value = $value[$segment]; }
@@ -164,6 +206,11 @@ final class TestView
 
     private function sync(): void
     {
+        $this->html = preg_replace_callback('#<([a-z][a-z0-9-]*)\b([^>]*)\bdata-aml-bind-value=("[^"]*"|\'[^\']*\')([^>]*)>(.*?)</\1>#is', function (array $match): string {
+            $expression = json_decode(html_entity_decode(substr($match[3], 1, -1), ENT_QUOTES | ENT_HTML5, 'UTF-8'), true, 512, JSON_THROW_ON_ERROR);
+            $value = htmlspecialchars((string) ($this->resolveValue($expression) ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            return '<' . $match[1] . $match[2] . 'data-aml-bind-value=' . $match[3] . $match[4] . '>' . $value . '</' . $match[1] . '>';
+        }, $this->html) ?? $this->html;
         $this->html = preg_replace_callback('#<([a-z][a-z0-9-]*)\b([^>]*)\bdata-aml-bind=("[^"]*"|\'[^\']*\')([^>]*)>(.*?)</\1>#is', function (array $match): string {
             $path = html_entity_decode(substr($match[3], 1, -1), ENT_QUOTES | ENT_HTML5, 'UTF-8');
             $value = htmlspecialchars((string) ($this->read($path) ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');

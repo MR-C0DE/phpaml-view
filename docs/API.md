@@ -10,16 +10,69 @@
 
 ## State and validation
 
+`Text()` recognizes state placeholders while a component is being rendered:
+
+```php
+Text('Count: {count}');
+Text('User: {profile.name}');
+```
+
+The root name must refer to a `#[State]` property. Values are rendered on the
+server, escaped, and kept reactive by AML Engine. Doubled braces such as
+`{{count}}` render a literal `{count}`.
+
+`onClick()` also accepts a restricted frontend closure:
+
+```php
+Button('Update')->onClick(function (): void {
+    $this->count += 2;
+    $this->message = 'Ready';
+});
+```
+
+The closure is parsed and never executed by PHP. Version 0.1's initial compiler
+accepts `++`, `--`, `=`, `+=` and `-=` on declared `#[State]` properties. Values
+may use scalar literals, state properties, local variables, parentheses and
+`+`, `-`, `*`, `/` or `%` with normal PHP precedence. Other PHP statements are
+rejected rather than serialized or evaluated.
+Boolean `!`, string concatenation with `.`, and `*=`, `/=`, `%=` and `.=` are
+also accepted.
+PHP ternary expressions are accepted when their condition depends on reactive
+state; both result branches may contain any supported safe value expression.
+`onClick()` also accepts a first-class callable created from a named component
+method, such as `$this->increment(...)`. The method body is compiled with the
+same restricted grammar and never invoked during rendering.
+Single-expression event handlers may use PHP arrow functions, for example
+`onClick(fn () => $this->count++)`. Arrow functions remain subject to the same
+state-only grammar and never permit arbitrary PHP execution.
+`Text()` accepts safe `StateExpression` and `StateConditional` values. A concise
+conditional output can use `$this->state('enabled')->choose($then, $otherwise)`;
+the browser recalculates it whenever reactive state changes.
+`prefixedBy()` places a safe value before a reactive expression, while
+`concat()` appends one after it.
+Frontend handlers accept `$this->items[] = $value`, `array_pop($this->items)`
+and `array_shift($this->items)` for safe state-collection mutations.
+
+Frontend closures also accept `if`/`elseif`/`else` (including `else if`) with a boolean state or a state
+comparison using `==`, `===`, `!=`, `!==`, `>`, `>=`, `<` or `<=` and a scalar,
+state reference or calculated local expression. Branches may contain the same
+supported state mutations.
+
 - `#[State]`: exposes a typed initial value to PHPAML Engine.
 - `$this->state('property')`: creates a validated reactive reference without
   importing or manually initializing `StateRef`.
+- `value($this->state('property'))`: explicitly connects a form control to
+  reactive state; scalar values remain ordinary non-reactive HTML values.
+- `name()`, `type()`, `placeholder()`, `autocomplete()`, `autofocus()`,
+  `pattern()`, `inputMode()`, `min()`, `max()` and `step()` expose safe native
+  field attributes fluently.
 - `#[Shared('key')]`: synchronizes state across mounted pages/components.
 - `#[Persisted(storage, key, version, expiresAfter, migrations)]`: restores versioned,
   optionally expiring browser state.
 - `#[Computed]`: caches a parameterless method for one server render. Supplying
   `dependencies`, `operation` and optionally `separator` also declares its safe
   frontend recalculation.
-- `model($this->state('property'))`: concise typed control binding.
+- `model($this->state('property'))`: lower-level typed control binding.
 - `bindClient('property')`: lower-level string-based control binding.
 - `required()`, `email()`, `minLength()`: synchronous frontend validation.
 - `validateWith(ApiAction $request, ...)`: explicit asynchronous validation.
@@ -84,7 +137,9 @@ does not need a semantic or styled container.
   `download()`, `controls()`, `autoplay()`, `muted()`, `loop()`,
   `playsInline()`, `poster()`, `preload()`, `loading()`, `allowFullScreen()`.
 - HTML/CSS: `class(...$names)`, `attribute()`, `style()`.
-- Events: `onClick(ClientInstruction)` and its alias `click()`.
+- Events: `onClick()`, `onSubmit()`, `onInput()`, `onChange()`, `onFocus()` and
+  `onBlur()` accept a `ClientInstruction` or restricted frontend PHP closure.
+- `submit()` marks a button as the explicit form submitter.
 - Actions: `disabled()`, `status()`, `loadingLabel()`.
 
 ## Routing
@@ -222,8 +277,32 @@ accepts the request CSP nonce through `render($nonce)`.
 
 ## Effects
 
-- `#[Effect(dependencies: [], runOnMount: true, debounce: 0, throttle: 0, concurrency: 'latest')]` marks a
-  parameterless component method returning `ClientInstruction` or `EffectPlan`.
+- `#[Effect('state', runOnMount: true, debounce: 0, throttle: 0, concurrency: 'latest')]`
+  marks a parameterless `void` method compiled from the safe frontend PHP subset.
+- Multiple dependencies use `#[Effect(['first', 'last'])]` or the compatible
+  named form `#[Effect(dependencies: ['first', 'last'])]`.
+- Advanced effect methods may return `ClientInstruction` or `EffectPlan`.
+- `OnChange($state, $closure, initial: false, debounce: 0, throttle: 0,
+  concurrency: 'latest')` registers a short inline effect in `body()`.
+- Inline dependencies must be `StateRef` instances; pass an array for multiple
+  states. Raw PHP values are intentionally rejected because they no longer
+  identify their originating state.
+- `Effect($closure, $dependencies, runOnMount: true, debounce: 0, throttle: 0,
+  concurrency: 'latest')` registers a hook-style effect before `body()` returns.
+  Keep these calls unconditional. PHP permits the `Effect` class and function
+  imports to coexist; they occupy separate symbol tables.
+- `ActionState($closureOrInstruction)` returns an executable action exposing
+  reactive `pending`, `success`, and `error` state references.
+- `FormState()` returns `dirty`, `touched`, `valid`, `invalid`, `submitting`,
+  `submitted`, and `error` references. Attach it with `Form(...)->state($form)`,
+  wrap submission with `$form->action($instruction)`, and reset with
+  `$form->reset()`.
+- `Reducer($initial, $transitions)` creates isolated state; each transition
+  receives its `StateRef`, and `dispatch($name)` returns the safe instruction.
+- `Context($name, $value, $content)` and `UseContext($name, $fallback)` provide
+  concise context creation and consumption.
+- `Ref()` creates an element reference attached with `->ref($ref)`. Allowed
+  actions are `focus()`, `blur()`, `select()`, `play()`, and `pause()`.
 - `Effects::run($action)` executes once.
 - `Effects::timeout($milliseconds, $action)` executes once after a delay.
 - `Effects::interval($milliseconds, $action)` repeats until cleanup.

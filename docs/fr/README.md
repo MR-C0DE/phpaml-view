@@ -77,7 +77,129 @@ des thèmes sont rangés librement sous `src/views/themes/{theme}`.
 
 ## Fonctionnalités
 
+Une phrase peut intégrer directement un état réactif :
+
+```php
+Text('Compteur : {count}');
+Text('Bonjour {profile.name}');
+```
+
+Le nom racine doit correspondre à une propriété `#[State]`. Les chemins
+imbriqués restent échappés et réactifs. Pour afficher littéralement
+`{count}`, utilisez `Text('Exemple : {{count}}')`.
+
+Les mutations frontend simples peuvent utiliser une closure PHP naturelle :
+
+```php
+Button('Ajouter')->onClick(function (): void {
+    $this->count++;
+});
+
+Button('Réinitialiser')->onClick(function (): void {
+    $this->count = 0;
+});
+```
+
+La closure est analysée sans être exécutée, puis convertie vers les actions
+déclaratives d'Engine. Le premier sous-ensemble accepte `++`, `--`, `=`, `+=`
+et `-=` sur les propriétés `#[State]`, ainsi que les variables locales et les
+calculs `+`, `-`, `*`, `/` et `%` :
+
+```php
+Button('Calculer')->onClick(function (): void {
+    $sousTotal = $this->prix * $this->quantite;
+    $this->total = $sousTotal - $this->remise;
+});
+```
+
+Les priorités PHP et les parenthèses sont respectées. Les appels PHP arbitraires et les
+propriétés non réactives sont refusés. Chaque closure frontend doit être écrite
+sur ses propres lignes afin que sa source soit identifiable sans ambiguïté.
+La négation booléenne, la concaténation et les affectations composées sont aussi
+acceptées : `$this->ouvert = !$this->ouvert`, `$this->message = 'Total : ' . $this->total`
+et `$this->quantite *= 2`.
+Les ternaires PHP sont également réactifs :
+
+```php
+$this->remise = $sousTotal >= 100 ? 10 : 0;
+$this->libelle = $this->actif ? 'Actif' : 'Inactif';
+```
+
+Une interaction plus longue ou réutilisable peut être placée dans une méthode
+nommée du composant, puis transmise comme callable PHP de première classe :
+
+```php
+private function incrementer(): void
+{
+    $this->compteur++;
+}
+
+// Dans body()
+Button('Ajouter')->onClick($this->incrementer(...));
+```
+
+La méthode est analysée avec les mêmes règles de sécurité frontend et n’est pas
+exécutée pendant le rendu serveur.
+
+Une action composée d’une seule expression peut utiliser la fonction fléchée PHP :
+
+```php
+Button('Ajouter')->onClick(fn () => $this->compteur++);
+Button('Basculer')->onClick(fn () => $this->actif = !$this->actif);
+```
+
+Une closure avec accolades ou une méthode nommée reste préférable pour plusieurs
+instructions.
+
+L’affichage réactif reste du PHP ordinaire. Une référence d’état validée indique
+les valeurs que le navigateur doit recalculer :
+
+```php
+Text('Compteur : {compteur}');
+Text($this->state('connecte')->choose('Bienvenue', 'Connexion requise'));
+Text($this->state('prix')->times($this->state('quantite')));
+Text($this->state('compteur')->prefixedBy('Compteur : '));
+Text($this->state('compteur')->concat(' éléments'));
+```
+
+`choose()` et les calculs sécurisés actualisent automatiquement leur texte quand
+leurs dépendances changent.
+
+Les premières mutations de collections utilisent la syntaxe PHP habituelle dans
+les gestionnaires frontend sécurisés :
+
+```php
+$this->taches[] = $this->nouvelleTache;
+array_pop($this->taches);
+array_shift($this->taches);
+```
+
+Seules ces opérations explicitement autorisées sont compilées ; les autres appels
+de fonctions PHP restent refusés.
+
+Les conditions `if/elseif/else` (y compris `else if`) sont également compilées :
+
+```php
+Button('Vérifier')->onClick(function (): void {
+    if ($this->count === 0) {
+        $this->message = 'Commencez';
+    } elseif ($this->count >= 10) {
+        $this->message = 'Objectif atteint';
+    } else {
+        $this->message = 'Continuez';
+    }
+});
+```
+
+Le sous-ensemble accepte les états booléens ainsi que `==`, `===`, `!=`,
+`!==`, `>`, `>=`, `<` et `<=` avec une valeur simple, un autre état ou une
+expression locale calculée.
+
 - propriétés réactives typées avec `#[State]` ;
+- liaison explicite d'un champ avec `value($this->state('propriete'))`, tandis
+  qu'une valeur scalaire reste une valeur HTML ordinaire ;
+- soumission et événements frontend avec `submit()`, `onSubmit()`, `onInput()`,
+  `onChange()`, `onFocus()` et `onBlur()` ;
 - état partagé avec `#[Shared]` et persistance locale/session avec
   `#[Persisted]` ;
 - propriétés calculées avec `#[Computed]` ;
@@ -171,6 +293,129 @@ When(
 
 `#[Effect]` exécute des actions dans le navigateur lorsque ses dépendances
 changent. Aucun clic ni nouvel appel à PHP n’est nécessaire.
+
+```php
+#[Effect('recherche', runOnMount: false, debounce: 250)]
+private function rechercheModifiee(): void
+{
+    if ($this->recherche === '') {
+        $this->message = 'Saisissez une recherche';
+    } else {
+        $this->message = 'Recherche : ' . $this->recherche;
+    }
+}
+```
+
+La méthode PHP est analysée sans être exécutée sur le serveur. Plusieurs
+dépendances utilisent `#[Effect(['prenom', 'nom'])]`. Pour un petit effet local
+à `body()`, la seconde forme est disponible :
+
+```php
+return VStack(
+    OnChange($this->state('age'), function (): void {
+        $this->categorie = $this->age < 18 ? 'mineur' : 'majeur';
+    }),
+    NumberInput()->name('age')->value($this->state('age')),
+    Text('{categorie}'),
+);
+```
+
+`OnChange()` convient aux petits effets locaux et ne s'exécute pas au montage
+par défaut. Les méthodes nommées `#[Effect]` restent recommandées pour les
+comportements importants ou réutilisables.
+
+Comme avec un Hook React, `Effect()` peut aussi être enregistré avant le
+`return` de `body()` :
+
+```php
+public function body(): View
+{
+    Effect(function (): void {
+        $this->message = 'Recherche : ' . $this->recherche;
+    }, [$this->state('recherche')], runOnMount: false);
+
+    return Text('{message}');
+}
+```
+
+Ces appels doivent rester inconditionnels. La classe d'attribut `Effect` et la
+fonction `Effect()` peuvent être importées ensemble en PHP.
+
+### État automatique d'une action
+
+`ActionState()` enveloppe une closure frontend ou une instruction client. Il
+fournit automatiquement les références réactives `pending`, `success` et
+`error`, sans ajouter trois propriétés `#[State]` :
+
+```php
+$enregistrement = ActionState(Api::post('/api/profil', [
+    'nom' => $this->state('nom'),
+]));
+
+return Form(
+    TextField()->value($this->state('nom')),
+    Button($enregistrement->pending->choose('Enregistrement…', 'Enregistrer'))
+        ->onClick($enregistrement)
+        ->disabledWhen($enregistrement->pending),
+    Text($enregistrement->error),
+);
+```
+
+À chaque exécution, l'ancienne erreur est effacée, l'action passe en attente,
+puis son succès ou son erreur est enregistré.
+
+### État complet d'un formulaire
+
+`FormState()` suit automatiquement le cycle de vie d'un formulaire natif :
+
+```php
+$formulaire = FormState();
+
+return Form(
+    EmailInput()
+        ->value($this->state('email'))
+        ->required(),
+
+    Button($formulaire->submitting->choose('Envoi…', 'Envoyer'))
+        ->submit()
+        ->disabledWhen($formulaire->invalid),
+
+    Button('Réinitialiser')->onClick($formulaire->reset()),
+    Text($formulaire->error),
+)
+    ->state($formulaire)
+    ->onSubmit($formulaire->action(
+        Api::post('/api/contact', ['email' => $this->state('email')]),
+    ));
+```
+
+Le handle expose `dirty`, `touched`, `valid`, `invalid`, `submitting`,
+`submitted` et `error`. La validation native et distante reste la source de
+vérité. La réinitialisation restaure aussi les valeurs réactives liées.
+
+### Reducer, contexte et références
+
+`Reducer()` convient à une valeur possédant plusieurs transitions nommées :
+
+```php
+$compteur = Reducer(0, [
+    'incrementer' => fn (StateRef $state) => $state->plus(1),
+    'decrementer' => fn (StateRef $state) => $state->minus(1),
+]);
+
+return VStack(
+    Text($compteur->state),
+    Button('+')->onClick($compteur->dispatch('incrementer')),
+    Button('-')->onClick($compteur->dispatch('decrementer')),
+);
+```
+
+`Context()` fournit une valeur et `UseContext()` lit la valeur du fournisseur
+le plus proche. `Ref()` donne un accès impératif limité à `focus`, `blur`,
+`select`, `play` et `pause`. Aucun nom de méthode arbitraire ni JavaScript n'est
+exécuté.
+
+La forme avancée reste disponible :
 
 ```php
 #[Effect(dependencies: ['recherche'], runOnMount: false, debounce: 250)]

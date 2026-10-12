@@ -7,12 +7,9 @@ namespace App\Views\Pages\Home;
 use App\Support\Copy;
 use AML\Engine\ClientAction;
 use AML\Engine\StateRef;
-use AML\View\Page;
-use AML\View\PageMetadata;
+use AML\View\{Page, PageMetadata, State, View};
 use AML\View\Persisted;
 use AML\View\Shared;
-use AML\View\State;
-use AML\View\View;
 use function AML\View\{Button, Element, Grid, Group, Heading, Link, MainContent, Section, Text, VStack};
 
 final class HomePage extends Page

@@ -30,7 +30,15 @@ use AML\View\Testing\ViewTest;
 use AML\View\Testing\TestExpectationFailed;
 
 use function AML\View\Button;
+use function AML\View\ActionState;
+use function AML\View\FormState;
+use function AML\View\Reducer;
+use function AML\View\Context;
+use function AML\View\UseContext;
+use function AML\View\Ref;
+use function AML\View\Checkbox;
 use function AML\View\Each;
+use function AML\View\Effect as InlineEffect;
 use function AML\View\Group;
 use function AML\View\Heading;
 use function AML\View\HStack;
@@ -87,6 +95,7 @@ use function AML\View\PasswordInput;
 use function AML\View\Progress;
 use function AML\View\RadioInput;
 use function AML\View\SearchInput;
+use function AML\View\Select;
 use function AML\View\TextArea;
 use function AML\View\Caption;
 use function AML\View\ColumnGroup;
@@ -142,6 +151,7 @@ use function AML\View\UploadForm;
 use function AML\View\ContextProvider;
 use function AML\View\ContextText;
 use function AML\View\Navigate;
+use function AML\View\OnChange;
 use function AML\View\NavigationBoundary;
 use function AML\View\Redirect;
 use function AML\View\RouterView;
@@ -214,7 +224,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.8', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.9', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -226,7 +236,7 @@ check('Public beta contract excludes the removed server runtime', function (): v
     ] as $removed) {
         expect(!class_exists($removed), "Removed class still exists: {$removed}");
     }
-    foreach (['onServerClick', 'onSubmit', 'onInput', 'onChange', 'bind'] as $removedMethod) {
+    foreach (['onServerClick', 'bind'] as $removedMethod) {
         expect(!method_exists(AML\View\Element::class, $removedMethod), "Removed method still exists: {$removedMethod}");
     }
     expect(!function_exists('AML\\View\\state'), 'Removed state() helper still exists.');
@@ -615,6 +625,499 @@ check('Concise state and button APIs preserve reactive client behavior', functio
     expect(str_contains($html, '&quot;value&quot;:3'), 'The optional Button action was not rendered.');
 });
 
+check('Text interpolates reactive state without losing its initial HTML value', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 2;
+        #[State] public array $profile = ['name' => '<André>'];
+
+        public function body(): View {
+            return VStack(
+                Text('Count: {count}; user: {profile.name}'),
+                Text('Literal braces: {{count}}'),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, 'Count: ') && str_contains($html, 'data-aml-bind="count">2</span>'), 'The interpolated scalar state is missing.');
+    expect(str_contains($html, 'data-aml-bind="profile.name">&lt;André&gt;</span>'), 'The interpolated nested state is missing or unsafe.');
+    expect(str_contains($html, 'Literal braces: {count}'), 'Escaped interpolation braces changed unexpectedly.');
+});
+
+check('Text rejects unknown reactive placeholders inside a component', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View { return Text('Count: {missing}'); }
+    };
+
+    try {
+        $renderer->render($page);
+        throw new RuntimeException('An unknown interpolation placeholder was accepted.');
+    } catch (OutOfBoundsException $error) {
+        expect(str_contains($error->getMessage(), '{missing}'), 'The interpolation error omits the unknown placeholder.');
+    }
+});
+
+check('Frontend closures compile basic state mutations without executing PHP', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 2;
+        #[State] public int $saved = 9;
+        #[State] public string $message = '';
+
+        public function body(): View {
+            return VStack(
+                Button('Increment')->onClick(function (): void {
+                    $this->count++;
+                }),
+                Button('Update')->onClick(function (): void {
+                    $this->count += 3;
+                    $this->message = 'Ready';
+                }),
+                Button('Reset')->onClick(function (): void {
+                    $this->count = 0;
+                }),
+                Button('Subtract')->onClick(function (): void {
+                    $this->count -= 2;
+                }),
+                Button('Restore')->onClick(function (): void {
+                    $this->count = $this->saved;
+                }),
+                Button('Decrement')->onClick(function (): void {
+                    $this->count--;
+                }),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;type&quot;:&quot;increment&quot;'), 'The increment closure was not compiled.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;sequence&quot;'), 'Multiple frontend statements were not composed.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;add&quot;') && str_contains($html, '&quot;value&quot;:&quot;Ready&quot;'), 'Closure assignments were not compiled.');
+    expect($page->count === 2 && $page->message === '', 'The frontend closure was executed on the server.');
+
+    ViewTest::render($page)
+        ->click('Increment')->assertState('count', 3)
+        ->click('Update')->assertState('count', 6)->assertState('message', 'Ready')
+        ->click('Subtract')->assertState('count', 4)
+        ->click('Reset')->assertState('count', 0)
+        ->click('Restore')->assertState('count', 9)
+        ->click('Decrement')->assertState('count', 8);
+});
+
+check('ActionState creates isolated reactive status for frontend closures', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+
+        public function body(): View {
+            $save = ActionState(function (): void {
+                $this->count++;
+            });
+
+            return VStack(
+                Button('Save')->onClick($save)->disabledWhen($save->pending),
+                Text($save->pending),
+                Text($save->success),
+                Text($save->error),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;type&quot;:&quot;action-state&quot;'), 'The action-state wrapper is missing.');
+    expect(str_contains($html, '__actions.action1.pending'), 'The pending state was not registered.');
+    expect(str_contains($html, '__actions.action1.success'), 'The success state was not registered.');
+    expect(str_contains($html, '__actions.action1.error'), 'The error state was not registered.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;increment&quot;'), 'The wrapped closure was not compiled.');
+    expect($page->count === 0, 'ActionState executed its frontend closure on the server.');
+});
+
+check('ActionState instances receive stable independent state paths', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View {
+            $first = ActionState(function (): void { $this->count++; });
+            $second = ActionState(function (): void { $this->count--; });
+            return VStack(Button('First')->onClick($first), Button('Second')->onClick($second));
+        }
+    };
+    $html = $renderer->render($page);
+    expect(str_contains($html, '__actions.action1.pending') && str_contains($html, '__actions.action2.pending'), 'Action states collided.');
+});
+
+check('FormState exposes complete isolated form lifecycle state', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $email = '';
+        public function body(): View {
+            $form = FormState();
+            return Form(
+                EmailInput()->value($this->state('email'))->required(),
+                Button($form->submitting->choose('Sending...', 'Send'))->submit(),
+                Button('Reset')->onClick($form->reset()),
+                Text($form->error),
+            )->state($form)->onSubmit($form->action(Api::post('/api/contact', ['email' => $this->state('email')])));
+        }
+    };
+    $html = $renderer->render($page);
+    foreach (['dirty', 'touched', 'valid', 'invalid', 'submitting', 'submitted', 'error'] as $status) {
+        expect(str_contains($html, '__forms.form1.' . $status), "Missing FormState status: {$status}");
+    }
+    expect(str_contains($html, 'data-aml-form-state='), 'FormState was not attached to the native form.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;form-state-action&quot;'), 'The tracked submit action is missing.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;form-state-reset&quot;'), 'The tracked reset action is missing.');
+});
+
+check('Reducer provides isolated named transitions', function () use ($renderer): void {
+    $page = new class extends Page {
+        public function body(): View {
+            $counter = Reducer(0, [
+                'increment' => static fn (StateRef $state) => $state->plus(1),
+                'decrement' => static fn (StateRef $state) => $state->minus(1),
+                'reset' => static fn () => 0,
+            ]);
+            return VStack(
+                Text($counter->state),
+                Button('+')->onClick($counter->dispatch('increment')),
+                Button('-')->onClick($counter->dispatch('decrement')),
+                Button('Reset')->onClick($counter->dispatch('reset')),
+            );
+        }
+    };
+    $html = $renderer->render($page);
+    expect(str_contains($html, '__reducers.reducer1.state'), 'Reducer state is missing.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;add&quot;'), 'Reducer increment transition is missing.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;subtract&quot;'), 'Reducer decrement transition is missing.');
+});
+
+check('Reducer rejects unknown dispatch actions', function (): void {
+    $page = new class extends Page {
+        public function body(): View {
+            $reducer = Reducer(0, ['increment' => static fn (StateRef $state) => $state->plus(1)]);
+            return Button('Invalid')->onClick($reducer->dispatch('missing'));
+        }
+    };
+    try {
+        (new Renderer())->render($page);
+        throw new RuntimeException('Unknown reducer action was accepted.');
+    } catch (OutOfBoundsException $error) {
+        expect(str_contains($error->getMessage(), 'missing'), 'Unknown reducer error omits the action name.');
+    }
+});
+
+check('Context and UseContext simplify the existing context contract', function () use ($renderer): void {
+    $html = $renderer->render(Context('locale', 'fr-CA', UseContext('locale', 'en-CA')));
+    expect(str_contains($html, 'data-aml-context-provider'), 'Concise context provider is missing.');
+    expect(str_contains($html, 'data-aml-context-bind="locale"'), 'Concise context reader is missing.');
+    expect(str_contains($html, 'fr-CA'), 'Concise context did not render its initial value.');
+});
+
+check('Ref exposes allowlisted element operations', function () use ($renderer): void {
+    $page = new class extends Page {
+        public function body(): View {
+            $field = Ref();
+            return VStack(
+                Input()->ref($field),
+                Button('Focus')->onClick($field->focus()),
+                Button('Select')->onClick($field->select()),
+            );
+        }
+    };
+    $html = $renderer->render($page);
+    expect(str_contains($html, 'data-aml-ref="ref1"'), 'Element ref marker is missing.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;element-ref&quot;'), 'Element ref action is missing.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;focus&quot;'), 'Focus ref operation is missing.');
+});
+
+check('Frontend closures reject non-state PHP execution', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View {
+            return Button('Unsafe')->onClick(function (): void { file_put_contents('/tmp/phpaml-unsafe', 'no'); });
+        }
+    };
+
+    try {
+        $renderer->render($page);
+        throw new RuntimeException('Arbitrary PHP execution was accepted in a frontend closure.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), '#[State]'), 'The unsafe closure error is not actionable.');
+    }
+    expect(!is_file('/tmp/phpaml-unsafe'), 'The rejected frontend closure executed PHP.');
+});
+
+check('Frontend closures compile if and else branches', function (): void {
+    $component = new class extends Page {
+        #[State] public int $count = 10;
+        #[State] public bool $enabled = true;
+        #[State] public string $message = '';
+
+        public function body(): View {
+            return VStack(
+                Button('Evaluate')->onClick(function (): void {
+                    if ($this->count >= 10) {
+                        $this->message = 'Goal reached';
+                    } else {
+                        $this->message = 'Keep going';
+                    }
+                }),
+                Button('Disable')->onClick(function (): void {
+                    if ($this->enabled) {
+                        $this->enabled = false;
+                    }
+                }),
+            );
+        }
+    };
+
+    $view = ViewTest::render($component);
+    $view->click('Evaluate')->assertState('message', 'Goal reached');
+    $view->click('Disable')->assertState('enabled', false);
+});
+
+check('Frontend closures compile local variables and arithmetic with PHP precedence', function (): void {
+    $component = new class extends Page {
+        #[State] public int $price = 12;
+        #[State] public int $quantity = 3;
+        #[State] public int $discount = 4;
+        #[State] public int $total = 0;
+
+        public function body(): View {
+            return Button('Calculate')->onClick(function (): void {
+                $subtotal = $this->price * $this->quantity;
+                $this->total = $subtotal - $this->discount + 2 * 3;
+            });
+        }
+    };
+
+    ViewTest::render($component)->click('Calculate')->assertState('total', 38);
+});
+
+check('Frontend closures compile boolean negation, concatenation and compound arithmetic', function (): void {
+    $component = new class extends Page {
+        #[State] public bool $enabled = true;
+        #[State] public int $count = 3;
+        #[State] public string $message = '';
+
+        public function body(): View {
+            return Button('Transform')->onClick(function (): void {
+                $this->enabled = !$this->enabled;
+                $this->count *= 2;
+                $this->message = 'Count: ' . $this->count;
+            });
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('Transform')
+        ->assertState('enabled', false)
+        ->assertState('count', 6)
+        ->assertState('message', 'Count: 6');
+});
+
+check('Frontend closures compare calculated local expressions', function (): void {
+    $component = new class extends Page {
+        #[State] public int $price = 40;
+        #[State] public int $quantity = 3;
+        #[State] public int $discount = 0;
+
+        public function body(): View {
+            return Button('Discount')->onClick(function (): void {
+                $subtotal = $this->price * $this->quantity;
+                if ($subtotal >= 100) {
+                    $this->discount = 10;
+                } else {
+                    $this->discount = 0;
+                }
+            });
+        }
+    };
+
+    ViewTest::render($component)->click('Discount')->assertState('discount', 10);
+});
+
+check('Frontend closures compile PHP if elseif else branches', function (): void {
+    $component = new class extends Page {
+        #[State] public int $age = 17;
+        #[State] public string $category = '';
+
+        public function body(): View {
+            return VStack(
+                Button('Classify minor')->onClick(function (): void {
+                    if ($this->age === 0) {
+                        $this->category = 'unknown';
+                    } elseif ($this->age < 18) {
+                        $this->category = 'minor';
+                    } else {
+                        $this->category = 'adult';
+                    }
+                }),
+                Button('Become adult')->onClick(fn () => $this->age = 18),
+                Button('Classify adult')->onClick(function (): void {
+                    if ($this->age === 0) {
+                        $this->category = 'unknown';
+                    } else if ($this->age < 18) {
+                        $this->category = 'minor';
+                    } else {
+                        $this->category = 'adult';
+                    }
+                }),
+            );
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('Classify minor')->assertState('category', 'minor')
+        ->click('Become adult')->assertState('age', 18)
+        ->click('Classify adult')->assertState('category', 'adult');
+});
+
+check('Frontend closures compile PHP ternary expressions', function (): void {
+    $component = new class extends Page {
+        #[State] public int $price = 40;
+        #[State] public int $quantity = 3;
+        #[State] public int $discount = 0;
+        #[State] public bool $enabled = true;
+        #[State] public string $label = '';
+
+        public function body(): View {
+            return Button('Ternary')->onClick(function (): void {
+                $subtotal = $this->price * $this->quantity;
+                $this->discount = $subtotal >= 100 ? 10 : 0;
+                $this->label = $this->enabled ? 'Actif' : 'Inactif';
+            });
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('Ternary')
+        ->assertState('discount', 10)
+        ->assertState('label', 'Actif');
+});
+
+check('Named component methods compile as reusable frontend handlers', function (): void {
+    $component = new class extends Page {
+        #[State] public int $count = 1;
+
+        private function increment(): void
+        {
+            $this->count++;
+        }
+
+        private function double(): void
+        {
+            $this->count *= 2;
+        }
+
+        public function body(): View
+        {
+            return VStack(
+                Button('Named increment')->onClick($this->increment(...)),
+                Button('Named double')->onClick($this->double(...)),
+            );
+        }
+    };
+
+    expect($component->count === 1, 'A named frontend handler ran during server rendering.');
+    ViewTest::render($component)
+        ->click('Named increment')->assertState('count', 2)
+        ->click('Named double')->assertState('count', 4);
+});
+
+check('Named frontend handlers reject arbitrary PHP execution', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public string $message = '';
+
+        private function unsafe(): void
+        {
+            file_put_contents('/tmp/phpaml-unsafe-method', 'no');
+        }
+
+        public function body(): View
+        {
+            return Button('Unsafe named')->onClick($this->unsafe(...));
+        }
+    };
+
+    try {
+        $renderer->render($component);
+        throw new RuntimeException('An unsafe named frontend handler was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), '#[State]'), 'The unsafe named-handler error is not actionable.');
+    }
+    expect(!is_file('/tmp/phpaml-unsafe-method'), 'The rejected named handler executed PHP.');
+});
+
+check('Frontend arrow functions compile concise single-expression handlers', function (): void {
+    $component = new class extends Page {
+        #[State] public int $count = 1;
+        #[State] public bool $enabled = true;
+
+        public function body(): View
+        {
+            return VStack(
+                Button('Arrow increment')->onClick(
+                    fn () => $this->count++
+                ),
+                Button('Arrow toggle')->onClick(
+                    fn () => $this->enabled = !$this->enabled
+                ),
+                Button('Arrow calculation')->onClick(
+                    fn () => $this->count = ($this->count + 2) * 3
+                ),
+            );
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('Arrow increment')->assertState('count', 2)
+        ->click('Arrow toggle')->assertState('enabled', false)
+        ->click('Arrow calculation')->assertState('count', 12);
+});
+
+check('Reactive output displays safe PHP state choices and calculations', function (): void {
+    $component = new class extends Page {
+        #[State] public bool $connected = false;
+        #[State] public int $count = 2;
+
+        public function body(): View
+        {
+            return VStack(
+                Text($this->state('connected')->choose('Bienvenue', 'Connexion requise')),
+                Text($this->state('count')->times(2)),
+                Text($this->state('count')->prefixedBy('Compteur : ')),
+                Text($this->state('count')->concat(' éléments')),
+                Button('Connect')->onClick(fn () => $this->connected = true),
+                Button('Add display')->onClick(fn () => $this->count++),
+            );
+        }
+    };
+
+    ViewTest::render($component)
+        ->assertSee('Connexion requise')->assertSee('4')->assertSee('Compteur : 2')->assertSee('2 éléments')
+        ->click('Connect')->assertSee('Bienvenue')
+        ->click('Add display')->assertSee('6')->assertSee('Compteur : 3')->assertSee('3 éléments');
+});
+
+check('Frontend closures append, pop and shift state collections with PHP syntax', function (): void {
+    $component = new class extends Page {
+        #[State] public array $tasks = ['Première'];
+        #[State] public string $newTask = 'Deuxième';
+
+        public function body(): View
+        {
+            return VStack(
+                Button('PHP append')->onClick(fn () => $this->tasks[] = $this->newTask),
+                Button('PHP pop')->onClick(fn () => array_pop($this->tasks)),
+                Button('PHP shift')->onClick(fn () => array_shift($this->tasks)),
+            );
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('PHP append')->assertState('tasks', ['Première', 'Deuxième'])
+        ->click('PHP pop')->assertState('tasks', ['Première'])
+        ->click('PHP append')->click('PHP shift')->assertState('tasks', ['Deuxième']);
+});
+
 check('Concise state helper rejects unmarked properties and unknown names', function () use ($renderer): void {
     $unmarked = new class extends Page {
         public int $count = 0;
@@ -648,11 +1151,79 @@ check('Concise form binding keeps controls connected to typed state', function (
 
     $html = $renderer->render($page);
     expect(
-        str_contains($html, '<input name="name" type="text"')
+        str_contains($html, '<input')
+        && str_contains($html, 'name="name"')
+        && str_contains($html, 'type="text"')
         && str_contains($html, 'data-aml-model="name"')
         && str_contains($html, 'data-aml-bind="name"'),
         'The concise text field binding is incomplete.',
     );
+});
+
+check('Form controls bind state explicitly through value', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $name = 'André';
+        #[State] public string $bio = '';
+        #[State] public bool $subscribed = false;
+        #[State] public string $role = 'member';
+
+        public function body(): View {
+            return Form(
+                TextField()->name('name')->value($this->state('name'))->placeholder('Your name'),
+                TextArea()->name('bio')->value($this->state('bio'))->rows(4),
+                Checkbox()->name('subscribed')->value($this->state('subscribed')),
+                Select('role', ['member' => 'Member', 'admin' => 'Admin'])->value($this->state('role')),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['name', 'bio', 'subscribed', 'role'] as $state) {
+        expect(
+            str_contains($html, 'data-aml-model="' . $state . '"')
+            && str_contains($html, 'data-aml-bind="' . $state . '"'),
+            "The {$state} control was not automatically connected to its state.",
+        );
+    }
+    expect(str_contains($html, 'value="André"'), 'The reactive text field omitted its initial state value.');
+    expect(str_contains($html, 'placeholder="Your name"'), 'The fluent field attributes were not rendered.');
+});
+
+check('Form control value stays non-reactive for ordinary PHP values', function () use ($renderer): void {
+    $html = $renderer->render(
+        Input()->name('age')->type('number')->value(18)->min(0)->max(120)->step(1)->autofocus(),
+    );
+    expect(str_contains($html, 'name="age"'), 'The fluent input name is missing.');
+    expect(str_contains($html, 'type="number"'), 'The fluent input type is missing.');
+    expect(str_contains($html, 'value="18"'), 'The ordinary input value is missing.');
+    expect(!str_contains($html, 'data-aml-model'), 'An ordinary PHP value unexpectedly became reactive.');
+});
+
+check('Forms expose secure PHP frontend events and explicit submit buttons', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $name = '';
+        #[State] public bool $focused = false;
+        #[State] public bool $submitted = false;
+
+        public function body(): View {
+            return Form(
+                TextField()
+                    ->name('name')
+                    ->value($this->state('name'))
+                    ->onInput(fn () => $this->focused = true)
+                    ->onChange(fn () => $this->focused = false)
+                    ->onFocus(fn () => $this->focused = true)
+                    ->onBlur(fn () => $this->focused = false),
+                Button('Send')->submit(),
+            )->onSubmit(fn () => $this->submitted = true);
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['input', 'change', 'focus', 'blur', 'submit'] as $event) {
+        expect(str_contains($html, 'data-aml-client-' . $event), "The {$event} frontend event is missing.");
+    }
+    expect(str_contains($html, '<button type="submit"'), 'The explicit submit button type is missing.');
 });
 
 check('Shared and persisted state emit a frontend configuration', function () use ($renderer): void {
@@ -680,7 +1251,7 @@ check('Reusable component instances receive isolated state scopes', function () 
         #[State] public int $count = 0;
         public function body(): View {
             return Group(
-                Text(StateRef::to('count', $this->count)),
+                Text('Count: {count}'),
                 Button('Add')->onClick(ClientAction::increment('count')),
             );
         }
@@ -888,6 +1459,79 @@ check('#[Effect] emits scoped dependencies and declarative actions', function ()
         && substr_count($html, 'components.') >= 3,
         'Effect manifest or component scoping failed.',
     );
+});
+
+check('#[Effect] compiles natural PHP methods without executing them on the server', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public int $count = 1;
+        #[State] public string $message = '';
+
+        #[Effect('count', runOnMount: false)]
+        private function countChanged(): void
+        {
+            if ($this->count >= 10) {
+                $this->message = 'Goal reached';
+            } else {
+                $this->message = 'Keep going';
+            }
+        }
+
+        public function body(): View
+        {
+            return Text('{message}');
+        }
+    };
+
+    $html = $renderer->render($component);
+    expect($component->message === '', 'The natural effect executed during server rendering.');
+    expect(str_contains($html, '&quot;dependencies&quot;:[&quot;count&quot;]'), 'The concise effect dependency is missing.');
+    expect(str_contains($html, '&quot;runOnMount&quot;:false'), 'The natural effect mount policy is missing.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;condition&quot;'), 'The natural PHP effect was not compiled.');
+});
+
+check('OnChange registers a concise inline effect with explicit state references', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public int $age = 17;
+        #[State] public string $category = '';
+
+        public function body(): View
+        {
+            return Group(
+                OnChange($this->state('age'), function (): void {
+                    $this->category = $this->age < 18 ? 'minor' : 'adult';
+                }),
+                Text('{category}'),
+            );
+        }
+    };
+
+    $html = $renderer->render($component);
+    expect($component->category === '', 'The inline effect executed during server rendering.');
+    expect(str_contains($html, 'inline.'), 'The inline effect identifier is missing.');
+    expect(str_contains($html, '&quot;dependencies&quot;:[&quot;age&quot;]'), 'The inline effect dependency is missing.');
+    expect(str_contains($html, '&quot;runOnMount&quot;:false'), 'OnChange should not run initially by default.');
+});
+
+check('Effect registers a React-style hook before the body return', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public string $search = '';
+        #[State] public string $message = '';
+
+        public function body(): View
+        {
+            InlineEffect(function (): void {
+                $this->message = 'Search: ' . $this->search;
+            }, [$this->state('search')], runOnMount: false, debounce: 200);
+
+            return Text('{message}');
+        }
+    };
+
+    $html = $renderer->render($component);
+    expect($component->message === '', 'The hook-style effect executed during server rendering.');
+    expect(str_contains($html, 'hook.'), 'The hook-style effect identifier is missing.');
+    expect(str_contains($html, '&quot;dependencies&quot;:[&quot;search&quot;]'), 'The hook dependency is missing.');
+    expect(str_contains($html, '&quot;debounce&quot;:200'), 'The hook debounce setting is missing.');
 });
 
 check('#[Effect] rejects unusable declarations', function (): void {

@@ -2,6 +2,51 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.9 — 2026-10-12
+
+- Added safe reactive state interpolation in `Text()`, including nested paths
+  and escaped literal braces.
+- Added an initial no-`eval` frontend closure compiler for `onClick()`, covering
+  direct state assignment, increment, decrement, `+=` and `-=` while rejecting
+  arbitrary PHP execution.
+- Added safe `if`/`elseif`/`else`, boolean-state checks and scalar comparisons to frontend
+  event closures.
+- Added local frontend variables and arithmetic expressions with PHP precedence,
+  parentheses, multiplication, division and modulo.
+- Added boolean negation, string concatenation and compound arithmetic assignments
+  to natural frontend closures.
+- Allowed `if`/`else` conditions to compare calculated local expressions and
+  other reactive state values.
+- Added safe reactive PHP ternary expressions to frontend closures.
+- Added named component methods as reusable first-class frontend event handlers.
+- Added concise PHP arrow functions for single-expression frontend handlers.
+- Added reactive calculated and conditional text output through safe PHP values
+  and `StateRef::choose()`.
+- Added `prefixedBy()` and reactive suffix concatenation for readable text output.
+- Added PHP-native collection append, `array_pop()` and `array_shift()` syntax to
+  safe frontend handlers.
+- Form controls now expose fluent `name()`, `type()` and `value()` attributes.
+  Passing a `StateRef` to `value()` creates an explicit two-way binding, while
+  scalar values remain ordinary non-reactive HTML values.
+- Added `submit()`, `onSubmit()`, `onInput()`, `onChange()`, `onFocus()` and
+  `onBlur()` using the same restricted PHP frontend closures as `onClick()`.
+- `#[Effect('state')]` now accepts a concise single dependency and compiles
+  `void` methods written with the safe natural frontend PHP subset.
+- Added `OnChange($state, $closure)` for short inline effects while preserving
+  named `#[Effect]` methods as the primary reusable API.
+- Added hook-style `Effect($closure, $dependencies)` registration before the
+  return statement of `body()`, analogous to React while retaining pure PHP.
+- Added `ActionState()` with automatic reactive `pending`, `success`, and
+  `error` state for frontend closures and client API instructions.
+- Added `FormState()` to track dirty, touched, validity, submission and error
+  state, including a reset action that restores bound controls.
+- Added isolated named `Reducer()` transitions, concise `Context()` and
+  `UseContext()` helpers, and allowlisted `Ref()` element operations.
+- Standardized public examples on native grouped PHP imports to keep page files
+  concise without exposing global functions.
+- Updated `ViewTest` to evaluate safe state expressions emitted by frontend
+  closures.
+
 ## 0.1.0-beta.8 — 2026-10-07
 
 - support safe `plus()` and `minus()` state expressions in `sets()` actions;

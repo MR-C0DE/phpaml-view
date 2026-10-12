@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 use AML\Engine\ClientAction;
 use AML\Engine\StateRef;
-use AML\View\Page;
-use AML\View\State;
-use AML\View\View;
+use AML\View\{Page, State, View};
 use function AML\View\{Button, Column, Heading, Text};
 
 final class Home extends Page

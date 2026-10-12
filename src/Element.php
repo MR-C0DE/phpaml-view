@@ -9,6 +9,7 @@ use AML\Engine\ClientInstruction;
 use AML\Engine\ApiAction;
 use AML\Engine\StateRef;
 use AML\Engine\StateNamespace;
+use Closure;
 
 class Element implements View
 {
@@ -130,6 +131,71 @@ class Element implements View
             throw new \InvalidArgumentException('An HTML id must be a non-empty token.');
         }
         return $this->attribute('id', $id);
+    }
+
+    public function name(string $name): static
+    {
+        if ($name === '' || preg_match('/\s/', $name) === 1) {
+            throw new \InvalidArgumentException('A form control name must be a non-empty token.');
+        }
+        return $this->attribute('name', $name);
+    }
+
+    public function type(string $type): static
+    {
+        if ($type === '' || preg_match('/\s/', $type) === 1) {
+            throw new \InvalidArgumentException('A form control type must be a non-empty token.');
+        }
+        return $this->attribute('type', strtolower($type));
+    }
+
+    public function value(string|int|float|bool|StateRef|null $value): static
+    {
+        $initial = $value instanceof StateRef ? $value->initial : $value;
+        if ($value instanceof StateRef) {
+            if ($this->tag === 'input' && strtolower((string) ($this->attributes['type'] ?? 'text')) === 'file') {
+                throw new \InvalidArgumentException('A file input value cannot be controlled programmatically.');
+            }
+            $this->model($value);
+        }
+
+        $type = strtolower((string) ($this->attributes['type'] ?? ''));
+        if ($this->tag === 'textarea') {
+            $this->children = [new TextView((string) ($initial ?? ''))];
+            return $this;
+        }
+        if ($this->tag === 'select') {
+            return $this->attribute('data-aml-value', is_bool($initial) ? ($initial ? '1' : '0') : $initial);
+        }
+        if ($this->tag === 'input' && in_array($type, ['checkbox', 'radio'], true) && is_bool($initial)) {
+            return $this->attribute('checked', $initial);
+        }
+        return $this->attribute('value', is_bool($initial) ? ($initial ? '1' : '0') : $initial);
+    }
+
+    public function autofocus(bool $enabled = true): static
+    {
+        return $this->attribute('autofocus', $enabled);
+    }
+
+    public function ref(RefHandle $ref): static
+    {
+        return $this->attribute('data-aml-ref', $ref->id);
+    }
+
+    public function pattern(string $pattern): static
+    {
+        if ($pattern === '') throw new \InvalidArgumentException('Input pattern cannot be empty.');
+        return $this->attribute('pattern', $pattern);
+    }
+
+    public function inputMode(string $mode): static
+    {
+        $mode = strtolower($mode);
+        if (!in_array($mode, ['none', 'text', 'decimal', 'numeric', 'tel', 'search', 'email', 'url'], true)) {
+            throw new \InvalidArgumentException("Unknown input mode: {$mode}");
+        }
+        return $this->attribute('inputmode', $mode);
     }
 
     public function placeholder(string $text): static
@@ -420,6 +486,17 @@ class Element implements View
         return $this->attribute('data-aml-form-preserve', $key);
     }
 
+    public function state(FormStateHandle $state): static
+    {
+        if ($this->tag !== 'form') {
+            throw new \LogicException('FormState can only be attached to a form element.');
+        }
+        return $this->attribute(
+            'data-aml-form-state',
+            json_encode($state->manifest(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+        );
+    }
+
     public function transition(string $name = 'fade', int $milliseconds = 180): static
     {
         if (!in_array($name, ['fade', 'slide', 'scale'], true)) {
@@ -467,14 +544,50 @@ class Element implements View
         return $this;
     }
 
-    public function click(ClientInstruction $handler): static
+    public function click(ClientInstruction|Closure $handler): static
     {
         return $this->onClick($handler);
     }
 
-    public function onClick(ClientInstruction $handler): static
+    public function onClick(ClientInstruction|Closure $handler): static
     {
-        $this->clientEvents['click'] = $handler;
+        return $this->onClientEvent('click', $handler);
+    }
+
+    public function onSubmit(ClientInstruction|Closure $handler): static
+    {
+        return $this->onClientEvent('submit', $handler);
+    }
+
+    public function onInput(ClientInstruction|Closure $handler): static
+    {
+        return $this->onClientEvent('input', $handler);
+    }
+
+    public function onChange(ClientInstruction|Closure $handler): static
+    {
+        return $this->onClientEvent('change', $handler);
+    }
+
+    public function onFocus(ClientInstruction|Closure $handler): static
+    {
+        return $this->onClientEvent('focus', $handler);
+    }
+
+    public function onBlur(ClientInstruction|Closure $handler): static
+    {
+        return $this->onClientEvent('blur', $handler);
+    }
+
+    public function submit(bool $enabled = true): static
+    {
+        return $this->type($enabled ? 'submit' : 'button');
+    }
+
+    private function onClientEvent(string $event, ClientInstruction|Closure $handler): static
+    {
+        if ($handler instanceof Closure) $handler = FrontendClosureCompiler::compile($handler);
+        $this->clientEvents[$event] = $handler;
         return $this;
     }
 

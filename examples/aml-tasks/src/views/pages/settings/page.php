@@ -6,10 +6,7 @@ namespace App\Views\Pages\Settings;
 
 use App\Support\Copy;
 use AML\Engine\StateRef;
-use AML\View\Page;
-use AML\View\PageMetadata;
-use AML\View\State;
-use AML\View\View;
+use AML\View\{Page, PageMetadata, State, View};
 use function AML\View\{Heading, Link, MainContent, Section, Tabs, Text, ThemeSwitcher, VStack};
 
 final class SettingsPage extends Page

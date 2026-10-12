@@ -10,12 +10,9 @@ use AML\Engine\ClientAction;
 use AML\Engine\StateRef;
 use AML\View\CollectionItem;
 use AML\View\Computed;
-use AML\View\Page;
-use AML\View\PageMetadata;
+use AML\View\{Page, PageMetadata, State, View};
 use AML\View\Persisted;
 use AML\View\Shared;
-use AML\View\State;
-use AML\View\View;
 use function AML\View\{Button, Each, Element, Form, Group, Heading, Input, MainContent, Section, Text, VStack, When};
 
 final class TasksPage extends Page

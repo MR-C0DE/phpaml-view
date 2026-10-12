@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace AML\View;
 
 use AML\Engine\StateRef;
+use AML\Engine\StateExpression;
+use AML\Engine\StateConditional;
 use AML\Engine\ClientAction;
 use AML\Engine\ClientInstruction;
 use AML\Engine\NavigationAction;
@@ -15,13 +17,89 @@ function textValue(string|Closure $value): View
     return new TextView($value);
 }
 
-function Text(string|Closure|StateRef $content): Element
+function Text(string|Closure|StateRef|StateExpression|StateConditional $content): Element
 {
     if ($content instanceof StateRef) {
         return (new Element('span', new TextView((string) ($content->initial ?? ''))))
             ->attribute('data-aml-bind', $content->name);
     }
+    if ($content instanceof StateExpression || $content instanceof StateConditional) {
+        return (new Element('span', new TextView((string) (initialReactiveValue($content) ?? ''))))
+            ->attribute('data-aml-bind-value', json_encode(normalizeReactiveValue($content), JSON_THROW_ON_ERROR));
+    }
+    if (is_string($content) && str_contains($content, '{')) {
+        $states = StateInterpolation::current();
+        if ($states !== null) {
+            $children = [];
+            $offset = 0;
+            $matched = preg_match_all('/(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_.-]*)\}(?!\})/', $content, $matches, PREG_OFFSET_CAPTURE);
+            if ($matched === false) throw new \RuntimeException('Unable to parse AML View text interpolation.');
+            foreach ($matches[0] as $index => [$token, $position]) {
+                if ($position > $offset) $children[] = new TextView(str_replace(['{{', '}}'], ['{', '}'], substr($content, $offset, $position - $offset)));
+                $path = $matches[1][$index][0];
+                [$root] = explode('.', $path, 2);
+                if (!isset($states[$root])) {
+                    throw new \OutOfBoundsException("Unknown AML View state placeholder: {{$path}}");
+                }
+                $initial = $states[$root]->initial;
+                foreach (array_slice(explode('.', $path), 1) as $segment) {
+                    $initial = is_array($initial) && array_key_exists($segment, $initial) ? $initial[$segment] : null;
+                }
+                $reference = StateRef::to($path, $initial);
+                $children[] = (new Element('span', new TextView((string) ($reference->initial ?? ''))))
+                    ->attribute('data-aml-bind', $reference->name);
+                $offset = $position + strlen($token);
+            }
+            if ($matched > 0) {
+                if ($offset < strlen($content)) $children[] = new TextView(str_replace(['{{', '}}'], ['{', '}'], substr($content, $offset)));
+                return new Element('span', ...$children);
+            }
+            $content = str_replace(['{{', '}}'], ['{', '}'], $content);
+        }
+    }
     return new Element('span', textValue($content));
+}
+
+/** @internal */
+function normalizeReactiveValue(mixed $value): mixed
+{
+    if ($value instanceof StateRef) return ['$state' => $value->name];
+    if ($value instanceof StateExpression || $value instanceof StateConditional) return normalizeReactiveValue($value->payload());
+    if (!is_array($value)) return $value;
+    return array_map(normalizeReactiveValue(...), $value);
+}
+
+/** @internal */
+function initialReactiveValue(mixed $value): mixed
+{
+    if ($value instanceof StateRef) return $value->initial;
+    if ($value instanceof StateExpression) {
+        $left = initialReactiveValue($value->left);
+        $right = initialReactiveValue($value->right);
+        return match ($value->operation) {
+            'add' => (float) $left + (float) $right,
+            'subtract' => (float) $left - (float) $right,
+            'multiply' => (float) $left * (float) $right,
+            'divide' => (float) $right !== 0.0 ? (float) $left / (float) $right : null,
+            'modulo' => (float) $right !== 0.0 ? (int) $left % (int) $right : null,
+            'concat' => (string) $left . (string) $right,
+            'not' => !(bool) $left,
+            default => null,
+        };
+    }
+    if ($value instanceof StateConditional) {
+        $left = initialReactiveValue($value->left);
+        $right = initialReactiveValue($value->right);
+        $matches = match ($value->operator) {
+            'eq' => $left === $right, 'neq' => $left !== $right,
+            'gt' => $left > $right, 'gte' => $left >= $right,
+            'lt' => $left < $right, 'lte' => $left <= $right,
+            'truthy' => (bool) $left, 'falsy' => !(bool) $left,
+            default => false,
+        };
+        return initialReactiveValue($matches ? $value->then : $value->otherwise);
+    }
+    return $value;
 }
 
 /**
@@ -825,13 +903,16 @@ function TableColumn(int $span = 1): Element
     return (new Element('col'))->attribute('span', $span === 1 ? null : $span);
 }
 
-function Action(string|Closure $label, ?ClientInstruction $action = null): Element
+function Action(string|Closure|StateRef|StateExpression|StateConditional $label, ?ClientInstruction $action = null): Element
 {
-    $button = (new Element('button', textValue($label)))->attribute('type', 'button');
+    $content = $label instanceof StateRef || $label instanceof StateExpression || $label instanceof StateConditional
+        ? Text($label)
+        : textValue($label);
+    $button = (new Element('button', $content))->attribute('type', 'button');
     return $action === null ? $button : $button->onClick($action);
 }
 
-function Button(string|Closure $label, ?ClientInstruction $action = null): Element
+function Button(string|Closure|StateRef|StateExpression|StateConditional $label, ?ClientInstruction $action = null): Element
 {
     return Action($label, $action);
 }
@@ -843,50 +924,190 @@ function Form(View ...$children): Element
         ->attribute('novalidate', true);
 }
 
+/**
+ * Register a small inline effect that reacts to one or more state references.
+ * Prefer a named #[Effect] method when the behavior is reusable or substantial.
+ *
+ * @param StateRef|list<StateRef> $states
+ */
+function OnChange(
+    StateRef|array $states,
+    Closure $run,
+    bool $initial = false,
+    int $debounce = 0,
+    int $throttle = 0,
+    string $concurrency = 'latest',
+): OnChangeView {
+    $dependencies = $states instanceof StateRef ? [$states] : array_values($states);
+    if ($dependencies === [] || array_filter($dependencies, static fn (mixed $state): bool => !$state instanceof StateRef) !== []) {
+        throw new \InvalidArgumentException('OnChange() requires one or more AML View state references.');
+    }
+    new Effect($dependencies === [] ? [] : array_map(static fn (StateRef $state): string => $state->name, $dependencies), $initial, $debounce, $throttle, $concurrency);
+    $reflection = new \ReflectionFunction($run);
+    $location = ($reflection->getFileName() ?: 'runtime') . ':' . $reflection->getStartLine() . ':' . $reflection->getEndLine();
+    $id = 'inline.' . substr(hash('sha256', $location . '|' . implode('|', array_map(static fn (StateRef $state): string => $state->name, $dependencies))), 0, 20);
+    return new OnChangeView(
+        $dependencies,
+        FrontendClosureCompiler::compile($run),
+        $initial,
+        $debounce,
+        $throttle,
+        $concurrency,
+        $id,
+    );
+}
+
+/**
+ * Register a hook-style effect before returning the component body.
+ *
+ * @param StateRef|list<StateRef> $dependencies
+ */
+function Effect(
+    Closure $run,
+    StateRef|array $dependencies = [],
+    bool $runOnMount = true,
+    int $debounce = 0,
+    int $throttle = 0,
+    string $concurrency = 'latest',
+): void {
+    $states = $dependencies instanceof StateRef ? [$dependencies] : array_values($dependencies);
+    if (array_filter($states, static fn (mixed $state): bool => !$state instanceof StateRef) !== []) {
+        throw new \InvalidArgumentException('Effect() dependencies must be AML View state references.');
+    }
+    $paths = array_map(static fn (StateRef $state): string => $state->name, $states);
+    new \AML\View\Effect($paths, $runOnMount, $debounce, $throttle, $concurrency);
+    $reflection = new \ReflectionFunction($run);
+    $location = ($reflection->getFileName() ?: 'runtime') . ':' . $reflection->getStartLine() . ':' . $reflection->getEndLine();
+    $id = 'hook.' . substr(hash('sha256', $location . '|' . implode('|', $paths)), 0, 20);
+    InlineEffectRegistry::register($id, [
+        ...\AML\Engine\Effects::run(FrontendClosureCompiler::compile($run))->payload(),
+        'dependencies' => $paths,
+        'runOnMount' => $runOnMount,
+        'debounce' => $debounce,
+        'throttle' => $throttle,
+        'concurrency' => $concurrency,
+    ]);
+}
+
+/**
+ * Wrap a frontend action and expose its pending, success and error states.
+ */
+function ActionState(ClientInstruction|Closure $run): ActionStateHandle
+{
+    $action = $run instanceof Closure ? FrontendClosureCompiler::compile($run) : $run;
+    $id = InlineStateRegistry::nextId('action');
+    $base = \AML\Engine\StateNamespace::qualify('__actions.' . $id);
+    InlineStateRegistry::register($base . '.pending', false);
+    InlineStateRegistry::register($base . '.success', false);
+    InlineStateRegistry::register($base . '.error', '');
+    return new ActionStateHandle($action, $base);
+}
+
+/** Create reactive status for one native form without manual #[State] fields. */
+function FormState(): FormStateHandle
+{
+    $id = InlineStateRegistry::nextId('form');
+    $base = \AML\Engine\StateNamespace::qualify('__forms.' . $id);
+    foreach ([
+        'dirty' => false,
+        'touched' => false,
+        'valid' => true,
+        'invalid' => false,
+        'submitting' => false,
+        'submitted' => false,
+        'error' => '',
+    ] as $name => $initial) {
+        InlineStateRegistry::register($base . '.' . $name, $initial);
+    }
+    return new FormStateHandle($base);
+}
+
+/**
+ * Create isolated state with named, safe transitions.
+ *
+ * @param array<string, Closure(StateRef): mixed|ClientInstruction> $transitions
+ */
+function Reducer(mixed $initial, array $transitions): ReducerHandle
+{
+    if ($transitions === []) throw new \InvalidArgumentException('Reducer() requires at least one transition.');
+    $id = InlineStateRegistry::nextId('reducer');
+    $target = \AML\Engine\StateNamespace::qualify('__reducers.' . $id . '.state');
+    InlineStateRegistry::register($target, $initial);
+    $state = StateRef::to($target, $initial);
+    $actions = [];
+    foreach ($transitions as $name => $transition) {
+        if (!is_string($name) || preg_match('/^[a-zA-Z_][a-zA-Z0-9_-]*$/', $name) !== 1 || !$transition instanceof Closure) {
+            throw new \InvalidArgumentException('Reducer transitions require safe names and closures.');
+        }
+        $result = $transition($state);
+        $actions[$name] = $result instanceof ClientInstruction
+            ? $result
+            : ClientAction::set($state->name, $result);
+    }
+    return new ReducerHandle($state, $actions);
+}
+
+/** Concise context provider. */
+function Context(string $name, mixed $value, View $content, bool $persist = false, ?string $storageKey = null): ContextProviderView
+{
+    return ContextProvider($name, $value, $content, $persist, $storageKey);
+}
+
+/** Read the nearest matching context value. */
+function UseContext(string $name, mixed $fallback = ''): ContextValueView
+{
+    return ContextText($name, $fallback);
+}
+
+/** Create a safe reference to one rendered element. */
+function Ref(): RefHandle
+{
+    return new RefHandle(InlineStateRegistry::nextId('ref'));
+}
+
 function UploadForm(View ...$children): Element
 {
     return Form(...$children)->attribute('enctype', 'multipart/form-data');
 }
 
-function Input(string $name, string $type = 'text', string|int|float|null $value = null): Element
+function Input(string $name = '', string $type = 'text', string|int|float|bool|StateRef|null $value = null): Element
 {
-    return (new Element('input'))
-        ->attribute('name', $name)
-        ->attribute('type', $type)
-        ->attribute('value', $value);
+    $input = (new Element('input'))->type($type);
+    if ($name !== '') $input->name($name);
+    return $value === null ? $input : $input->value($value);
 }
 
-function TextField(string $name, string|int|float|null $value = null): Element
+function TextField(string $name = '', string|int|float|StateRef|null $value = null): Element
 {
     return Input($name, 'text', $value);
 }
 
-function EmailInput(string $name, string $value = ''): Element
+function EmailInput(string $name = '', string|StateRef|null $value = null): Element
 {
     return Input($name, 'email', $value)->email();
 }
 
-function PasswordInput(string $name): Element
+function PasswordInput(string $name = ''): Element
 {
     return Input($name, 'password');
 }
 
-function NumberInput(string $name, int|float|null $value = null): Element
+function NumberInput(string $name = '', int|float|StateRef|null $value = null): Element
 {
     return Input($name, 'number', $value);
 }
 
-function DateInput(string $name, ?string $value = null): Element
+function DateInput(string $name = '', string|StateRef|null $value = null): Element
 {
     return Input($name, 'date', $value);
 }
 
-function SearchInput(string $name, string $value = ''): Element
+function SearchInput(string $name = '', string|StateRef|null $value = null): Element
 {
     return Input($name, 'search', $value);
 }
 
-function HiddenInput(string $name, string|int|float|null $value = null): Element
+function HiddenInput(string $name = '', string|int|float|StateRef|null $value = null): Element
 {
     return Input($name, 'hidden', $value);
 }
@@ -909,9 +1130,11 @@ function FileInput(string $name, array $accept = [], bool $multiple = false, ?St
     return $files === null ? $input : $input->bindClient($files->name);
 }
 
-function TextArea(string $name, string $value = ''): Element
+function TextArea(string $name = '', string|StateRef|null $value = null): Element
 {
-    return (new Element('textarea', textValue($value)))->attribute('name', $name);
+    $textarea = new Element('textarea');
+    if ($name !== '') $textarea->name($name);
+    return $value === null ? $textarea : $textarea->value($value);
 }
 
 function Label(string|Closure $label, string $for): Element
@@ -932,13 +1155,13 @@ function Legend(string|Closure|StateRef|View ...$children): Element
     ));
 }
 
-function Checkbox(string $name, bool $checked = false, string $value = '1'): Element
+function Checkbox(string $name = '', bool|StateRef $checked = false, string $value = '1'): Element
 {
-    return (new Element('input'))
-        ->attribute('name', $name)
-        ->attribute('type', 'checkbox')
-        ->attribute('value', $value)
-        ->attribute('checked', $checked);
+    $input = (new Element('input'))
+        ->type('checkbox')
+        ->attribute('value', $value);
+    if ($name !== '') $input->name($name);
+    return $input->value($checked);
 }
 
 /** @param array<string|int, string> $options */
