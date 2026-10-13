@@ -2,6 +2,16 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.12 — 2026-10-13
+
+- add natural PHP handlers for keyboard, mouse and drag-and-drop events;
+- compile safe `isset()`, `array_search()`, `array_key_exists()`, scalar casts,
+  rounding and numeric bounds for reactive frontend closures;
+- complete PHP-native collection loops, reusable handlers, asynchronous request
+  state and client-only scripts without executing arbitrary PHP in the browser;
+- retain the existing advanced forms, effects and isolated component APIs
+  without introducing duplicate abstractions.
+
 ## 0.1.0-beta.11 — 2026-10-12
 
 - Allow every `#[State]` property to bind directly through

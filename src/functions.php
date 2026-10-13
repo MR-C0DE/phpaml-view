@@ -487,6 +487,12 @@ function Audio(View ...$children): Element
     return new Element('audio', ...$children);
 }
 
+/** Load one local external JavaScript file. Inline scripts are not supported. */
+function Script(?string $source = null): ScriptElement
+{
+    return new ScriptElement($source);
+}
+
 function Source(string $source, ?string $type = null, ?string $media = null): Element
 {
     return (new Element('source'))
@@ -975,7 +981,7 @@ function OnChange(
  * @param StateRef|list<StateRef> $dependencies
  */
 function Effect(
-    Closure $run,
+    Closure|ClientInstruction $run,
     StateRef|array $dependencies = [],
     bool $runOnMount = true,
     int $debounce = 0,
@@ -988,11 +994,17 @@ function Effect(
     }
     $paths = array_map(static fn (StateRef $state): string => $state->name, $states);
     new \AML\View\Effect($paths, $runOnMount, $debounce, $throttle, $concurrency);
-    $reflection = new \ReflectionFunction($run);
-    $location = ($reflection->getFileName() ?: 'runtime') . ':' . $reflection->getStartLine() . ':' . $reflection->getEndLine();
-    $id = 'hook.' . substr(hash('sha256', $location . '|' . implode('|', $paths)), 0, 20);
+    if ($run instanceof Closure) {
+        $reflection = new \ReflectionFunction($run);
+        $location = ($reflection->getFileName() ?: 'runtime') . ':' . $reflection->getStartLine() . ':' . $reflection->getEndLine();
+        $id = 'hook.' . substr(hash('sha256', $location . '|' . implode('|', $paths)), 0, 20);
+        $action = FrontendClosureCompiler::compile($run);
+    } else {
+        $id = 'hook.' . InlineStateRegistry::nextId('effect');
+        $action = $run;
+    }
     InlineEffectRegistry::register($id, [
-        ...\AML\Engine\Effects::run(FrontendClosureCompiler::compile($run))->payload(),
+        ...\AML\Engine\Effects::run($action)->payload(),
         'dependencies' => $paths,
         'runOnMount' => $runOnMount,
         'debounce' => $debounce,
@@ -1013,6 +1025,24 @@ function ActionState(ClientInstruction|Closure $run): ActionStateHandle
     InlineStateRegistry::register($base . '.success', false);
     InlineStateRegistry::register($base . '.error', '');
     return new ActionStateHandle($action, $base);
+}
+
+/**
+ * Prepare a same-origin API request with result, pending, success and error
+ * states without declaring four separate #[State] properties.
+ */
+function Request(
+    \AML\Engine\ApiAction $request,
+    mixed $initial = [],
+    ?string $select = null,
+): RequestStateHandle {
+    $id = InlineStateRegistry::nextId('request');
+    $base = \AML\Engine\StateNamespace::qualify('__requests.' . $id);
+    InlineStateRegistry::register($base . '.data', $initial);
+    InlineStateRegistry::register($base . '.pending', false);
+    InlineStateRegistry::register($base . '.success', false);
+    InlineStateRegistry::register($base . '.error', '');
+    return new RequestStateHandle($request, $base, $initial, $select);
 }
 
 /** Create reactive status for one native form without manual #[State] fields. */

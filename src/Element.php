@@ -62,10 +62,13 @@ class Element implements View
     {
         $classes = preg_split('/\s+/', trim((string) ($this->attributes['class'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         foreach ($names as $name) {
-            if ($name === '' || preg_match('/\s/', $name) === 1) {
+            $tokens = preg_split('/\s+/', trim($name), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            if ($tokens === []) {
                 throw new \InvalidArgumentException('A class name must be a non-empty HTML token.');
             }
-            $classes[] = $name;
+            foreach ($tokens as $token) {
+                $classes[] = $token;
+            }
         }
         $this->attributes['class'] = implode(' ', array_values(array_unique($classes)));
         return $this;
@@ -581,6 +584,15 @@ class Element implements View
     {
         return $this->onClientEvent('blur', $handler);
     }
+
+    public function onKeyDown(ClientInstruction|Closure $handler): static { return $this->onClientEvent('keydown', $handler); }
+    public function onKeyUp(ClientInstruction|Closure $handler): static { return $this->onClientEvent('keyup', $handler); }
+    public function onMouseEnter(ClientInstruction|Closure $handler): static { return $this->onClientEvent('mouseenter', $handler); }
+    public function onMouseLeave(ClientInstruction|Closure $handler): static { return $this->onClientEvent('mouseleave', $handler); }
+    public function onDragStart(ClientInstruction|Closure $handler): static { return $this->onClientEvent('dragstart', $handler); }
+    public function onDragEnd(ClientInstruction|Closure $handler): static { return $this->onClientEvent('dragend', $handler); }
+    public function onDragOver(ClientInstruction|Closure $handler): static { return $this->onClientEvent('dragover', $handler); }
+    public function onDrop(ClientInstruction|Closure $handler): static { return $this->onClientEvent('drop', $handler); }
 
     public function submit(bool $enabled = true): static
     {

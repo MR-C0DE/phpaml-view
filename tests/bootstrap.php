@@ -19,5 +19,5 @@ spl_autoload_register(static function (string $class) use ($root): void {
         if (is_file($path)) require $path;
         return;
     }
-});
+}, true, true);
 require_once $root . '/src/functions.php';

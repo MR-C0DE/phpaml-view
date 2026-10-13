@@ -33,6 +33,7 @@ use function AML\View\Button;
 use function AML\View\ActionState;
 use function AML\View\FormState;
 use function AML\View\Reducer;
+use function AML\View\Request;
 use function AML\View\Context;
 use function AML\View\UseContext;
 use function AML\View\Ref;
@@ -95,6 +96,7 @@ use function AML\View\PasswordInput;
 use function AML\View\Progress;
 use function AML\View\RadioInput;
 use function AML\View\SearchInput;
+use function AML\View\Script;
 use function AML\View\Select;
 use function AML\View\TextArea;
 use function AML\View\Caption;
@@ -224,7 +226,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.11', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.12', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -306,6 +308,28 @@ check('Native media factories render accessible HTML contracts', function () use
         InvalidArgumentException::class,
         'Unknown media track kind',
     );
+});
+
+check('Script loads local external files without allowing inline or remote JavaScript', function () use ($renderer): void {
+    $short = $renderer->render(Script('/scripts/pages/home.js')->defer());
+    expect(
+        $short === '<script src="/scripts/pages/home.js" defer></script>',
+        'The concise local script contract is incorrect.',
+    );
+
+    $configured = $renderer->render(Script()->src('scripts/home.js')->module()->async());
+    expect(
+        $configured === '<script src="scripts/home.js" type="module" async></script>',
+        'The configurable local script contract is incorrect.',
+    );
+
+    foreach (['https://example.com/app.js', '//example.com/app.js', 'javascript:alert(1)', '../private.js', "scripts/evil\n.js"] as $unsafe) {
+        try {
+            Script($unsafe);
+            throw new RuntimeException("Unsafe script source was accepted: {$unsafe}");
+        } catch (InvalidArgumentException) {
+        }
+    }
 });
 
 check('Native form factories expose accessible declarative controls', function () use ($renderer): void {
@@ -799,6 +823,114 @@ check('ActionState instances receive stable independent state paths', function (
     expect(str_contains($html, '__actions.action1.pending') && str_contains($html, '__actions.action2.pending'), 'Action states collided.');
 });
 
+check('Request exposes API data and lifecycle state without manual fields', function () use ($renderer): void {
+    $page = new class extends Page {
+        public function body(): View
+        {
+            $users = Request(Api::get('/api/users'), initial: [], select: 'users');
+
+            return VStack(
+                Button($users->pending->choose('Loading...', 'Load users'))
+                    ->onClick($users)
+                    ->disabledWhen($users->pending),
+                Text($users->success),
+                Text($users->error),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['data', 'pending', 'success', 'error'] as $state) {
+        expect(str_contains($html, '__requests.request1.' . $state), "Missing Request state: {$state}");
+    }
+    expect(str_contains($html, '&quot;type&quot;:&quot;api&quot;'), 'Request did not retain the API action.');
+    expect(str_contains($html, '&quot;select&quot;:&quot;users&quot;'), 'Request did not retain the response selector.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;action-state&quot;'), 'Request did not track its lifecycle.');
+});
+
+check('Effect runs tracked requests on mount with explicit concurrency', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $query = '';
+
+        public function body(): View
+        {
+            $results = Request(
+                Api::get('/api/search', ['q' => $this->state('query')]),
+                initial: [],
+                select: 'results',
+            );
+            InlineEffect(
+                $results,
+                [$this->state('query')],
+                debounce: 250,
+                concurrency: 'latest',
+            );
+
+            return VStack(
+                Input()->value($this->state('query')),
+                Text($results->pending),
+                Text($results->error),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;type&quot;:&quot;action-state&quot;'), 'Effect did not retain the tracked request.');
+    expect(str_contains($html, '\/api\/search'), 'Effect did not retain the request URL.');
+    expect(str_contains($html, '&quot;dependencies&quot;:[&quot;query&quot;]'), 'Effect did not retain request dependencies.');
+    expect(str_contains($html, '&quot;debounce&quot;:250'), 'Effect did not retain request debounce.');
+    expect(str_contains($html, '&quot;concurrency&quot;:&quot;latest&quot;'), 'Effect did not retain latest-request cancellation.');
+});
+
+check('Request composes success error and final frontend actions', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $status = 'idle';
+
+        public function body(): View
+        {
+            $save = Request(Api::post('/api/save'))
+                ->onSuccess(function (): void { $this->status = 'saved'; })
+                ->onError(function (): void { $this->status = 'failed'; })
+                ->always(fn () => Console::log('Request finished'));
+
+            return VStack(
+                Button('Save')->onClick($save),
+                Text($this->status),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;onSuccess&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request success action is missing.');
+    expect(str_contains($html, '&quot;value&quot;:&quot;saved&quot;'), 'Request success value is missing.');
+    expect(str_contains($html, '&quot;onError&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request error action is missing.');
+    expect(str_contains($html, '&quot;value&quot;:&quot;failed&quot;'), 'Request error value is missing.');
+    expect(str_contains($html, '&quot;onFinally&quot;:{&quot;type&quot;:&quot;console&quot;'), 'Request final action is missing.');
+});
+
+check('Request supports promise-style lifecycle aliases', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public string $status = 'idle';
+
+        public function body(): View
+        {
+            $load = Request(Api::get('/api/users'), initial: [], select: 'users')
+                ->then(function (): void { $this->status = 'loaded'; })
+                ->catch(function (): void { $this->status = 'failed'; })
+                ->finally(fn () => Console::log('Request finished'));
+
+            return Button('Load')->onClick($load);
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;onSuccess&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request then() action is missing.');
+    expect(str_contains($html, '&quot;value&quot;:&quot;loaded&quot;'), 'Request then() value is missing.');
+    expect(str_contains($html, '&quot;onError&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request catch() action is missing.');
+    expect(str_contains($html, '&quot;value&quot;:&quot;failed&quot;'), 'Request catch() value is missing.');
+    expect(str_contains($html, '&quot;onFinally&quot;:{&quot;type&quot;:&quot;console&quot;'), 'Request finally() action is missing.');
+});
+
 check('FormState exposes complete isolated form lifecycle state', function () use ($renderer): void {
     $page = new class extends Page {
         #[State] public string $email = '';
@@ -1077,6 +1209,108 @@ check('Named component methods compile as reusable frontend handlers', function 
         ->click('Named double')->assertState('count', 4);
 });
 
+check('Frontend closures inline local methods with arguments', function (): void {
+    $component = new class extends Page {
+        #[State] public string $text = '';
+
+        private function append(string $value): void
+        {
+            $this->text .= $value;
+        }
+
+        public function body(): View
+        {
+            return VStack(
+                Text($this->text),
+                Button('Append seven')->onClick(fn () => $this->append('7')),
+                Button('Append eight')->onClick(fn () => $this->append('8')),
+            );
+        }
+    };
+
+    ViewTest::render($component)
+        ->click('Append seven')->assertState('text', '7')
+        ->click('Append eight')->assertState('text', '78')->assertSee('78');
+});
+
+check('Frontend closures inline local static methods with arguments', function (): void {
+    $component = new class extends Component {
+        #[State]
+        private int $counter = 0;
+
+        private static function add(int $amount): void
+        {
+            Console::log('Static amount', $amount);
+        }
+
+        public function body(): View
+        {
+            return VStack(
+                Button('Self')->onClick(fn () => self::add(2)),
+                Button('Static')->onClick(fn () => static::add(3)),
+            );
+        }
+    };
+
+    $html = (new Renderer())->render($component);
+    $decoded = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    expect(str_contains($decoded, 'Static amount'), 'A local static frontend method was not inlined.');
+    expect(str_contains($decoded, '"values":["Static amount",2]'), 'A static frontend method argument was not compiled.');
+    expect(str_contains($decoded, '"values":["Static amount",3]'), 'A late-static frontend method argument was not compiled.');
+});
+
+check('Frontend static calls cannot target instance methods', function (): void {
+    $component = new class extends Component {
+        private function instanceOnly(): void
+        {
+            Console::log('invalid');
+        }
+
+        public function body(): View
+        {
+            return Button('Invalid')
+                ->onClick(fn () => self::instanceOnly());
+        }
+    };
+
+    try {
+        (new Renderer())->render($component);
+        throw new RuntimeException('A static call to an instance frontend method was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), 'Unsupported local frontend method'), 'The static/instance mismatch error is not actionable.');
+    }
+});
+
+check('Frontend local methods reject recursive calls', function () use ($renderer): void {
+    $component = new class extends Page {
+        #[State] public int $count = 0;
+
+        private function recurse(): void
+        {
+            $this->recurse();
+        }
+
+        public function body(): View
+        {
+            return Button('Recurse')->onClick(fn () => $this->recurse());
+        }
+    };
+
+    try {
+        $renderer->render($component);
+        throw new RuntimeException('A recursive frontend method was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), 'Recursive'), 'The recursive method error is not actionable.');
+    }
+});
+
+check('Element class accepts both spaced and variadic class names', function () use ($renderer): void {
+    $html = $renderer->render(
+        Div()->class('calculator-key calculator-key-muted', 'active'),
+    );
+    expect(str_contains($html, 'class="calculator-key calculator-key-muted active"'), 'Spaced class names were not normalized.');
+});
+
 check('Named frontend handlers reject arbitrary PHP execution', function () use ($renderer): void {
     $component = new class extends Page {
         #[State] public string $message = '';
@@ -1171,6 +1405,486 @@ check('Frontend closures append, pop and shift state collections with PHP syntax
         ->click('PHP append')->assertState('tasks', ['Première', 'Deuxième'])
         ->click('PHP pop')->assertState('tasks', ['Première'])
         ->click('PHP append')->click('PHP shift')->assertState('tasks', ['Deuxième']);
+});
+
+check('Frontend closures compile bounded PHP for while and do while loops', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+
+        public function body(): View
+        {
+            return VStack(
+                Button('For')->onClick(function (): void {
+                    for ($i = 0; $i < 3; $i++) {
+                        $this->count++;
+                    }
+                }),
+                Button('While')->onClick(function (): void {
+                    $i = 0;
+                    while ($i < 2) {
+                        $this->count++;
+                        $i++;
+                    }
+                }),
+                Button('Do while')->onClick(function (): void {
+                    $i = 0;
+                    do {
+                        $this->count++;
+                        $i++;
+                    } while ($i < 2);
+                }),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(substr_count($html, '&quot;type&quot;:&quot;increment&quot;') === 7, 'PHP frontend loops did not expand to the expected actions.');
+});
+
+check('Frontend bounded loops support native break and continue', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public int $count = 0;
+
+        public function body(): View
+        {
+            return VStack(
+                Button('For control')->onClick(function (): void {
+                    for ($i = 0; $i < 8; $i++) {
+                        if ($i === 1) {
+                            continue;
+                        }
+                        if ($i === 4) {
+                            break;
+                        }
+                        $this->count++;
+                    }
+                }),
+                Button('While control')->onClick(function (): void {
+                    $i = 0;
+                    while ($i < 8) {
+                        $i++;
+                        if ($i < 3) {
+                            continue;
+                        }
+                        $this->count++;
+                        if ($i === 4) {
+                            break;
+                        }
+                    }
+                }),
+                Button('Do control')->onClick(function (): void {
+                    $i = 0;
+                    do {
+                        $i++;
+                        if ($i === 1) {
+                            continue;
+                        }
+                        $this->count++;
+                        if ($i === 3) {
+                            break;
+                        }
+                    } while ($i < 8);
+                }),
+            );
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(substr_count($html, '&quot;type&quot;:&quot;increment&quot;') === 7, 'break or continue produced the wrong number of bounded-loop actions.');
+});
+
+check('Frontend closures compile reactive PHP foreach loops with keys and nested values', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = [
+            ['name' => 'André', 'score' => 2],
+            ['name' => 'Marie', 'score' => 3],
+        ];
+        #[State] public int $total = 0;
+        #[State] public int $lastIndex = 0;
+        #[State] public array $names = [];
+
+        public function body(): View
+        {
+            return Button('Summarize')->onClick(function (): void {
+                foreach ($this->users as $index => $user) {
+                    if ($user['score'] < 3) {
+                        continue;
+                    }
+                    $this->total += $user['score'];
+                    $this->lastIndex = $index;
+                    $this->names[] = $user['name'];
+                    if ($index === 1) {
+                        break;
+                    }
+                }
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;type&quot;:&quot;foreach&quot;'), 'Reactive foreach action is missing.');
+    expect(str_contains($html, '&quot;source&quot;:&quot;users&quot;'), 'Reactive foreach source is missing.');
+    expect(str_contains($html, '&quot;$loop&quot;:&quot;user.score&quot;'), 'Nested foreach value is missing.');
+    expect(str_contains($html, '&quot;$loop&quot;:&quot;index&quot;'), 'Foreach key is missing.');
+    expect(str_contains($html, '&quot;$loop&quot;:&quot;user.name&quot;'), 'Nested appended foreach value is missing.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;continue&quot;'), 'Foreach continue signal is missing.');
+    expect(str_contains($html, '&quot;operation&quot;:&quot;break&quot;'), 'Foreach break signal is missing.');
+});
+
+check('Frontend closures compile nested reactive foreach loops', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $categories = [
+            ['name' => 'Hardware', 'products' => [
+                ['name' => 'Keyboard', 'price' => 80, 'available' => true],
+                ['name' => 'Mouse', 'price' => 40, 'available' => false],
+            ]],
+        ];
+        #[State] public int $total = 0;
+        #[State] public array $selected = [];
+
+        public function body(): View
+        {
+            return Button('Calculate')->onClick(function (): void {
+                foreach ($this->categories as $category) {
+                    foreach ($category['products'] as $product) {
+                        if (!$product['available']) {
+                            continue;
+                        }
+                        $this->total += $product['price'];
+                        $this->selected[] = $category['name'] . ': ' . $product['name'];
+                        if ($product['price'] > 1000) {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(substr_count($html, '&quot;type&quot;:&quot;foreach&quot;') === 2, 'Nested foreach actions are missing.');
+    expect(str_contains($html, '&quot;source&quot;:{&quot;$loop&quot;:&quot;category.products&quot;}'), 'Nested foreach source does not reference its parent loop.');
+    expect(str_contains($html, '&quot;$loop&quot;:&quot;category.name&quot;'), 'Outer loop value is unavailable inside the nested loop.');
+    expect(str_contains($html, '&quot;$loop&quot;:&quot;product.price&quot;'), 'Inner loop value is unavailable inside its actions.');
+});
+
+check('Frontend loops reject state-driven and excessive iteration counts', function () use ($renderer): void {
+    $stateDriven = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View
+        {
+            return Button('Unsafe')->onClick(function (): void {
+                while ($this->count < 3) {
+                    $this->count++;
+                }
+            });
+        }
+    };
+    try {
+        $renderer->render($stateDriven);
+        throw new RuntimeException('A state-driven frontend loop was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), 'local values'), 'State-driven loop rejection was unclear.');
+    }
+
+    $excessive = new class extends Page {
+        #[State] public int $count = 0;
+        public function body(): View
+        {
+            return Button('Unsafe')->onClick(function (): void {
+                for ($i = 0; $i < 101; $i++) {
+                    $this->count++;
+                }
+            });
+        }
+    };
+    try {
+        $renderer->render($excessive);
+        throw new RuntimeException('An excessive frontend loop was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), 'safe limit'), 'Loop limit rejection was unclear.');
+    }
+});
+
+check('Frontend closures compile safe PHP collection functions', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $numbers = [2, 3, 5];
+        #[State] public array $allowed = ['admin', 'editor'];
+        #[State] public int $itemCount = 0;
+        #[State] public int $total = 0;
+        #[State] public bool $containsThree = false;
+        #[State] public string $message = '';
+
+        public function body(): View
+        {
+            return Button('Analyze')->onClick(function (): void {
+                $this->itemCount = count($this->numbers);
+                $this->total = array_sum($this->numbers);
+                $this->containsThree = in_array(3, $this->numbers, true);
+                if (in_array('admin', $this->allowed, true)) {
+                    $this->message = 'allowed';
+                }
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['count', 'sum', 'contains'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing {$operation} collection expression.");
+    }
+    expect(str_contains($html, '&quot;type&quot;:&quot;condition&quot;'), 'in_array() condition was not compiled.');
+});
+
+check('Frontend closures compile filter map and reduce arrow callbacks', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = [
+            ['name' => 'André', 'active' => true],
+            ['name' => 'Marie', 'active' => false],
+        ];
+        #[State] public array $prices = [2, 3, 5];
+        #[State] public array $activeUsers = [];
+        #[State] public array $names = [];
+        #[State] public int $total = 0;
+
+        public function body(): View
+        {
+            return Button('Transform')->onClick(function (): void {
+                $this->activeUsers = array_filter(
+                    $this->users,
+                    fn (array $user): bool => $user['active'],
+                );
+                $this->names = array_map(
+                    fn (array $user): string => $user['name'],
+                    $this->activeUsers,
+                );
+                $this->total = array_reduce(
+                    $this->prices,
+                    fn (int $sum, int $price): int => $sum + $price,
+                    0,
+                );
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['filter', 'map', 'reduce'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    }
+    expect(str_contains($html, '&quot;$collection&quot;:&quot;user.active&quot;'), 'Filter callback value is missing.');
+    expect(str_contains($html, '&quot;$collection&quot;:&quot;user.name&quot;'), 'Map callback value is missing.');
+    expect(str_contains($html, '&quot;$collection&quot;:&quot;sum&quot;'), 'Reduce accumulator is missing.');
+});
+
+check('Frontend closures compile find any all column and unique operations', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = [
+            ['name' => 'André', 'role' => 'admin', 'active' => true],
+            ['name' => 'Marie', 'role' => 'editor', 'active' => false],
+        ];
+        #[State] public array $tags = ['php', 'aml', 'php'];
+        #[State] public ?array $admin = null;
+        #[State] public bool $hasInactive = false;
+        #[State] public bool $allActive = false;
+        #[State] public array $names = [];
+        #[State] public array $uniqueTags = [];
+
+        public function body(): View
+        {
+            return Button('Inspect')->onClick(function (): void {
+                $this->admin = array_find($this->users, fn (array $user): bool => $user['role'] === 'admin');
+                $this->hasInactive = array_any($this->users, fn (array $user): bool => !$user['active']);
+                $this->allActive = array_all($this->users, fn (array $user): bool => $user['active']);
+                $this->names = array_column($this->users, 'name');
+                $this->uniqueTags = array_unique($this->tags);
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['find', 'any', 'all', 'column', 'unique'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    }
+});
+
+check('Frontend closures compile native sort and usort state mutations', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $numbers = [10, 2, 1];
+        #[State] public array $users = [['name' => 'Marie'], ['name' => 'André']];
+
+        public function body(): View
+        {
+            return Button('Sort')->onClick(function (): void {
+                sort($this->numbers);
+                usort($this->users, fn (array $a, array $b): int => $a['name'] <=> $b['name']);
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['sort', 'sortBy', 'compare'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    }
+});
+
+check('Frontend closures update and remove nested state collection values', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = [
+            ['name' => 'Marie', 'score' => 1],
+            ['name' => 'Alex', 'score' => 2],
+            ['name' => 'Sam', 'score' => 3],
+        ];
+
+        public function body(): View
+        {
+            return Button('Update')->onClick(function (): void {
+                $this->users[0]['name'] = 'André';
+                $this->users[1]['score']++;
+                unset($this->users[2]);
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(str_contains($html, '&quot;target&quot;:&quot;users.0.name&quot;'), 'Nested string assignment was not compiled.');
+    expect(str_contains($html, '&quot;target&quot;:&quot;users.1.score&quot;'), 'Nested numeric increment was not compiled.');
+    expect(str_contains($html, '&quot;type&quot;:&quot;remove-path&quot;'), 'Nested unset was not compiled.');
+    expect(str_contains($html, '&quot;target&quot;:&quot;users.2&quot;'), 'Nested unset target was not preserved.');
+});
+
+check('Frontend closures read nested state collection values naturally', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = [
+            ['name' => 'André', 'score' => 2, 'active' => true],
+            ['name' => 'Marie', 'score' => 3, 'active' => false],
+        ];
+        #[State] public string $selectedName = '';
+        #[State] public int $total = 0;
+        #[State] public string $status = '';
+
+        public function body(): View
+        {
+            return Button('Read')->onClick(function (): void {
+                $this->selectedName = $this->users[0]['name'];
+                $this->total = $this->users[0]['score'] + $this->users[1]['score'];
+                if ($this->users[0]['active']) {
+                    $this->status = 'active';
+                }
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['users.0.name', 'users.0.score', 'users.1.score'] as $path) {
+        expect(str_contains($html, '&quot;$state&quot;:&quot;' . $path . '&quot;'), "Missing nested frontend state read: {$path}");
+    }
+    expect(str_contains($html, '&quot;state&quot;:&quot;users.0.active&quot;'), 'Nested frontend condition state is missing.');
+});
+
+check('Frontend closures compile reverse slice and merge collection expressions', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $users = ['A', 'B', 'C', 'D'];
+        #[State] public array $admins = ['Admin'];
+        #[State] public array $members = ['Member'];
+        #[State] public array $reversed = [];
+        #[State] public array $page = [];
+        #[State] public array $everyone = [];
+
+        public function body(): View
+        {
+            return Button('Prepare')->onClick(function (): void {
+                $this->reversed = array_reverse($this->users);
+                $this->page = array_slice($this->users, 1, 2);
+                $this->everyone = array_merge($this->admins, $this->members, $this->users);
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['reverse', 'slice', 'merge'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    }
+});
+
+check('Frontend closures compile PHP search checks math bounds and casts', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $names = ['André', 'Marie'];
+        #[State] public array $user = ['email' => null, 'name' => 'André'];
+        #[State] public string $query = 'Marie';
+        #[State] public mixed $position = false;
+        #[State] public bool $hasEmail = false;
+        #[State] public bool $hasName = false;
+        #[State] public int $total = 10;
+        #[State] public int $pages = 0;
+        #[State] public int $currentPage = 9;
+        #[State] public string $value = '42';
+        #[State] public int $converted = 0;
+
+        public function body(): View
+        {
+            return Button('Calculate')->onClick(function (): void {
+                $this->position = array_search($this->query, $this->names, true);
+                $this->hasEmail = array_key_exists('email', $this->user);
+                $this->hasName = isset($this->user['name']);
+                $this->pages = (int) ceil($this->total / 3);
+                $this->currentPage = max(1, min($this->currentPage, $this->pages));
+                $this->converted = (int) $this->value;
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['search', 'keyExists', 'isset', 'ceil', 'min', 'max', 'toInt'] as $operation) {
+        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    }
+});
+
+check('Frontend conditions support native PHP boolean composition', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public bool $ready = false;
+        #[State] public bool $admin = false;
+        #[State] public bool $owner = false;
+        #[State] public int $count = 0;
+        #[State] public string $message = '';
+
+        public function body(): View
+        {
+            return Button('Check')->onClick(function (): void {
+                if ($this->ready && $this->count > 0) {
+                    $this->message = 'ready';
+                }
+                if ($this->admin || $this->owner) {
+                    $this->message = 'allowed';
+                }
+                if (($this->admin || $this->owner) && $this->ready) {
+                    $this->message = 'fully allowed';
+                }
+            });
+        }
+    };
+
+    $html = $renderer->render($page);
+    expect(substr_count($html, '&quot;type&quot;:&quot;condition&quot;') >= 7, 'Composed PHP conditions were not compiled into short-circuit actions.');
+    expect(str_contains($html, '&quot;state&quot;:&quot;ready&quot;'), 'Boolean state condition is missing.');
+    expect(str_contains($html, '&quot;state&quot;:&quot;count&quot;'), 'Numeric comparison in a composed condition is missing.');
+});
+
+check('Frontend in_array requires strict comparison', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public array $numbers = [1];
+        #[State] public bool $found = false;
+        public function body(): View
+        {
+            return Button('Unsafe')->onClick(function (): void {
+                $this->found = in_array(1, $this->numbers, false);
+            });
+        }
+    };
+    try {
+        $renderer->render($page);
+        throw new RuntimeException('Non-strict frontend in_array() was accepted.');
+    } catch (InvalidArgumentException $error) {
+        expect(str_contains($error->getMessage(), 'strict comparison'), 'in_array() rejection was unclear.');
+    }
 });
 
 check('Concise state helper rejects unmarked properties and unknown names', function () use ($renderer): void {
@@ -1279,6 +1993,29 @@ check('Forms expose secure PHP frontend events and explicit submit buttons', fun
         expect(str_contains($html, 'data-aml-client-' . $event), "The {$event} frontend event is missing.");
     }
     expect(str_contains($html, '<button type="submit"'), 'The explicit submit button type is missing.');
+});
+
+check('Elements expose keyboard mouse and drag frontend events', function () use ($renderer): void {
+    $page = new class extends Page {
+        #[State] public bool $active = false;
+
+        public function body(): View {
+            return Div(Text('Interactive'))
+                ->onKeyDown(fn () => $this->active = true)
+                ->onKeyUp(fn () => $this->active = false)
+                ->onMouseEnter(fn () => $this->active = true)
+                ->onMouseLeave(fn () => $this->active = false)
+                ->onDragStart(fn () => $this->active = true)
+                ->onDragEnd(fn () => $this->active = false)
+                ->onDragOver(fn () => $this->active = true)
+                ->onDrop(fn () => $this->active = false);
+        }
+    };
+
+    $html = $renderer->render($page);
+    foreach (['keydown', 'keyup', 'mouseenter', 'mouseleave', 'dragstart', 'dragend', 'dragover', 'drop'] as $event) {
+        expect(str_contains($html, 'data-aml-client-' . $event), "The {$event} frontend event is missing.");
+    }
 });
 
 check('Shared and persisted state emit a frontend configuration', function () use ($renderer): void {
