@@ -1,9 +1,16 @@
 # AML View — documentation française
 
+Voir les [sept extensions de View/Engine](extensions-langage.md) et leur périmètre exact.
 AML View est la bibliothèque frontend déclarative et optionnelle de PHPAML.
 Elle permet de construire des pages interactives en PHP sans JSX et sans
 framework JavaScript côté client. PHP produit le premier HTML, puis PHPAML
 Engine exécute les états et événements ordinaires dans le navigateur.
+
+La [matrice de compatibilité](compatibilite.md) réunit les fonctionnalités,
+leurs limites et le catalogue natif issu du registre Engine.
+
+Voir aussi : [textes réactifs dans les composants](textes-reactifs.md).
+Voir aussi : [niveau 9 — fichiers et données dans le navigateur](niveau-9-fichiers-donnees.md).
 
 ## Organisation d’une application
 
@@ -125,8 +132,9 @@ Button('Calculer')->onClick(function (): void {
 });
 ```
 
-Les priorités PHP et les parenthèses sont respectées. Les appels PHP arbitraires et les
-propriétés non réactives sont refusés. Chaque closure frontend doit être écrite
+Les priorités PHP et les parenthèses sont respectées. Les fonctions du catalogue
+natif et les fonctions de service compilées sont disponibles ; les propriétés
+ordinaires du composant ne deviennent pas automatiquement réactives. Chaque closure frontend doit être écrite
 sur ses propres lignes afin que sa source soit identifiable sans ambiguïté.
 La négation booléenne, la concaténation et les affectations composées sont aussi
 acceptées : `$this->ouvert = !$this->ouvert`, `$this->message = 'Total : ' . $this->total`
@@ -187,8 +195,8 @@ array_pop($this->taches);
 array_shift($this->taches);
 ```
 
-Seules ces opérations explicitement autorisées sont compilées ; les autres appels
-de fonctions PHP restent refusés.
+Ces opérations font partie du [catalogue natif](compatibilite.md#catalogue-natif).
+Les fonctions de service chargées peuvent également être compilées.
 
 Les conditions `if/elseif/else` (y compris `else if`) sont également compilées :
 
@@ -363,8 +371,9 @@ Effect(function (): void {
 }, [$this->state('compteur')], runOnMount: false);
 ```
 
-Seuls `Console::log()`, `Console::warning()` et `Console::error()` sont
-autorisés comme appels statiques. Les autres appels PHP restent refusés.
+`Console::log()`, `Console::warning()` et `Console::error()` écrivent dans la
+console du navigateur. Les méthodes statiques de services chargés sont aussi
+disponibles lorsque leur corps utilise le langage frontend pris en charge.
 
 ### État automatique d'une action
 
@@ -521,11 +530,13 @@ les régions live, les attributs ARIA et la navigation clavier des menus.
 
 Les formulaires disposent de `FileInput()` avec `UploadForm()`, de
 `ConditionalField()` et de `MultiStepForm()`. `->preserve('contact.draft')`
-conserve les valeurs ordinaires après une navigation ou une erreur serveur. Le
-contenu des fichiers n’est jamais enregistré dans le stockage du navigateur.
+conserve les valeurs ordinaires après une navigation ou une erreur serveur. Les
+champs fichiers sont exclus de cette conservation automatique. Une application
+peut explicitement lire un fichier avec `BrowserFiles`, puis conserver le State
+résultant avec `#[Persisted]`.
 Après confirmation du serveur, utilisez
 `AMLEngine.clearFormDraft('contact.draft')`. La taille, le type et le contenu
-des fichiers doivent toujours être validés de nouveau côté serveur.
+des fichiers envoyés à un serveur doivent toujours y être validés de nouveau.
 
 ## Formulaire validé
 
@@ -589,3 +600,72 @@ Ouvrez ensuite `http://127.0.0.1:8080`.
 
 Consultez également la [référence API](../API.md) et le
 [guide de sécurité](../../SECURITY.md).
+
+## Bases du langage frontend
+
+Le [guide du niveau 1](niveau-1-variables-types.md) couvre les variables locales,
+les types scalaires, les constantes, les conversions et les chaînes interpolées.
+
+Le [guide du niveau 2](niveau-2-operateurs.md) couvre les calculs, les comparaisons,
+les courts-circuits, les affectations et les priorités des opérateurs PHP.
+
+Le [guide des niveaux 3 à 5](niveaux-3-5-conditions-boucles-tableaux.md) couvre les
+conditions, les boucles au moment des événements, les tableaux et `echo` dans
+la console du navigateur.
+
+## Fonctions et services
+
+Le [niveau 6 — Fonctions](niveau-6-fonctions.md) décrit les appels entre fichiers,
+les paramètres, les retours, les closures, les références et la récursivité.
+
+Les [niveaux 7 et 8](niveaux-7-8-entrees-chaines-nombres.md) distinguent les
+entrées du terminal de celles du navigateur et couvrent les chaînes, la
+validation, les nombres, les arrondis et les montants en centimes.
+
+Le [niveau 9 — Fichiers et données](niveau-9-fichiers-donnees.md) couvre les
+imports locaux, les téléchargements et la persistance dans le navigateur.
+
+Le [niveau 10 — Erreurs et exceptions](niveau-10-erreurs-exceptions.md) couvre
+`try/catch/finally`, les exceptions de service, les traces, les logs et les
+assertions, avec les différences entre compilation PHP et événements frontend.
+
+## Bibliothèque native
+
+Le [guide Math, String et Array](fonctions-natives.md) décrit les callbacks,
+les références, les erreurs et les limites du navigateur. La liste exhaustive
+des fonctions est dans la [matrice de compatibilité](compatibilite.md#catalogue-natif).
+
+Le [guide Unicode](unicode.md) présente les 28 fonctions `mb_*`, les accents,
+les emoji et leur utilisation avec un `State` dans les composants.
+
+Le [guide BCMath](bcmath.md) couvre les 14 fonctions décimales exactes,
+les arrondis, les erreurs et les calculs réactifs.
+
+- [Sorties console et chaînes de diagnostic](sorties-console.md)
+
+- [Évaluer du PHP avec eval()](eval.md)
+- [Classes et objets de service](objets.md)
+
+- [Méthodes magiques des services frontend](methodes-magiques.md) : propriétés virtuelles, appels, Stringable et clonage.
+
+- [Classes anonymes et types intersection](classes-anonymes-intersections.md) : objets locaux, contrats `A&B`, unions DNF et exemple avec State.
+
+- [Introspection et __debugInfo](introspection.md) : classes, membres accessibles et diagnostics console.
+
+- [Collections Countable et ArrayAccess](collections.md) : compter, lire et modifier des objets avec `[]`.
+
+- [Iterator et IteratorAggregate](iterateurs.md) : parcours des services avec `foreach`, types `iterable` et limites.
+
+- [Générateurs](generateurs.md) : `yield`, `yield from`, reprise, envoi de valeurs et exceptions.
+
+- [JSON, expressions régulières et dates](json-regex-dates.md).
+- [Formats de dates, intervalles et périodes](dates-avancees.md).
+- [Validation et appels de fonctions](utilitaires.md) : `filter_var`, `is_callable`, `function_exists` et `call_user_func*`.
+- [Réservation complète](reservation.md) : formulaire, calcul calendaire, callbacks et export `JsonSerializable`.
+- [SPL et références](spl-references.md).
+- [Enums](enums.md).
+- [Fonctions et opérateurs complémentaires](fonctions-avancees.md).
+- [Programme combiné](../../examples/compatibilite/page.php) et [service](../../examples/compatibilite/service.php) : catalogue JSON, validation, statut enum, collection SPL et date.
+
+- [URL, validation, affichage Unicode et classes dynamiques](web-unicode-dynamique.md) : Base64, tableaux, graphèmes, normalisation, nombres localisés et nullsafe.
+- [Profil Unicode complet](../../examples/profil-unicode/page.php) et [service](../../examples/profil-unicode/service.php).

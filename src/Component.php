@@ -52,11 +52,13 @@ abstract class Component implements View
         NaturalStateBindings::enter($this);
         InlineEffectRegistry::enter();
         InlineStateRegistry::enter();
+        FrontendServiceScope::enter();
         try {
-            $html = $this->body()->render($context);
+            $html = NaturalStateBindings::captureReturned($this->body(), $this)->render($context);
             $effects = [...$this->clientEffects($scope), ...InlineEffectRegistry::current()];
             $inlineState = InlineStateRegistry::current();
         } finally {
+            $serviceScope = FrontendServiceScope::leave();
             InlineStateRegistry::leave();
             InlineEffectRegistry::leave();
             NaturalStateBindings::leave();
@@ -64,7 +66,8 @@ abstract class Component implements View
             if ($scope !== null) StateNamespace::leave();
             elseif ($previous !== null) StateNamespace::restore($previous);
         }
-        return $this->withClientState($html, $scope, $effects, $inlineState);
+        $marker = $serviceScope === null ? '' : '<template data-aml-service-scope="' . htmlspecialchars($serviceScope, ENT_QUOTES, 'UTF-8') . '"></template>';
+        return $marker . $this->withClientState($html, $scope, $effects, $inlineState);
     }
 
     /** @return array<string, StateRef> */
@@ -77,6 +80,12 @@ abstract class Component implements View
             $property->setAccessible(true);
             if (!$property->isInitialized($this)) continue;
             $states[$property->getName()] = StateRef::to($property->getName(), $property->getValue($this));
+        }
+        foreach ($reflection->getMethods() as $method) {
+            $attribute = $method->getAttributes(Computed::class)[0] ?? null;
+            if ($attribute === null || $method->getNumberOfRequiredParameters() !== 0 || $attribute->newInstance()->dependencies === []) continue;
+            $name = $method->getName();
+            $states[$name] = StateRef::to($name, $this->__get($name));
         }
         return $states;
     }
@@ -132,7 +141,7 @@ abstract class Component implements View
     private function withClientState(string $html, ?string $scope, array $effects, array $inlineState): string
     {
         $state = [];
-        $config = ['shared' => [], 'persisted' => [], 'types' => [], 'computed' => [], 'effects' => $effects];
+        $config = ['shared' => [], 'persisted' => [], 'types' => [], 'typeRules' => [], 'valueTypes' => [], 'computed' => [], 'effects' => $effects];
         $reflection = new \ReflectionObject($this);
         foreach ($reflection->getProperties() as $property) {
             if ($property->isStatic() || $property->getAttributes(State::class) === []) continue;
@@ -142,6 +151,15 @@ abstract class Component implements View
             $target = $scope === null ? $name : $scope . '.' . $name;
             $state[$target] = $property->getValue($this);
             $type = $property->getType();
+            $config['valueTypes'][$target] = gettype($property->getValue($this));
+            if ($type !== null) {
+                $members = $type instanceof \ReflectionUnionType ? $type->getTypes() : [$type];
+                $config['typeRules'][$target] = [
+                    'types' => array_map(static fn ($member): string => (string) $member, $members),
+                    'nullable' => $type->allowsNull(),
+                    'property' => ($property->getDeclaringClass()->isAnonymous() ? '(anonymous component)' : $property->getDeclaringClass()->getName()) . '::$' . $name,
+                ];
+            }
             if ($type instanceof \ReflectionNamedType && $type->isBuiltin()) {
                 $config['types'][$target] = $type->getName();
             }
@@ -191,9 +209,34 @@ abstract class Component implements View
             };
         }
         if ($state === [] && $effects === []) return $html;
-        $json = json_encode($state, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        foreach ($state as $target => $value) {
+            self::validateClientScalar($value, $target);
+            if (is_array($value)) $config['arrayMetadata'][$target] = self::arrayMetadata($value);
+        }
+        $json = json_encode($state, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         $configuration = json_encode($config, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         return '<template data-aml-state="' . htmlspecialchars($json, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" data-aml-state-config="' . htmlspecialchars($configuration, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"></template>' . $html;
+    }
+
+    private static function arrayMetadata(array $value): array
+    {
+        $probe = $value; $probe[] = null;
+        $entries = [];
+        foreach ($value as $key => $item) $entries[] = ['key' => $key, 'type' => gettype($item), ... (is_array($item) ? ['array' => self::arrayMetadata($item)] : [])];
+        return ['next' => array_key_last($probe), 'entries' => $entries];
+    }
+
+    private static function validateClientScalar(mixed $value, string $target, int $depth = 0): void
+    {
+        if ($depth >= 512) throw new \InvalidArgumentException("Frontend state {$target} exceeds JSON nesting depth.");
+        if (is_int($value) && abs($value) > 9007199254740991) {
+            throw new \RangeException("Frontend state {$target} exceeds JavaScript safe integer precision.");
+        }
+        if (is_float($value) && !is_finite($value)) throw new \RangeException("Frontend state {$target} must contain finite floats.");
+        if (is_array($value)) foreach ($value as $key => $item) {
+            if (is_int($key) && abs($key) > 9007199254740991) throw new \RangeException("Frontend array key in {$target} exceeds JavaScript safe integer precision.");
+            self::validateClientScalar($item, $target . '.' . $key, $depth + 1);
+        }
     }
 
     final public function __get(string $name): mixed

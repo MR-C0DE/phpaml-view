@@ -10,7 +10,7 @@ $source = dirname(__DIR__) . '/examples/aml-tasks/src/views';
 $application = new FileApplication($source);
 $expectations = [
     '/' => ['Your work, clearly organized.', 'data-aml-navigation-boundary'],
-    '/tasks' => ['Add task', '<form', 'data-aml-validate', 'data-aml-list="tasks"', 'data-aml-client-click'],
+    '/tasks' => ['Add task', '<form', 'data-aml-validate', 'data-aml-list="tasks"', 'data-aml-client-submit'],
     '/tasks/42' => ['Task #42', 'views/pages/tasks/[id]/page.php'],
     '/settings' => ['Application settings', 'data-aml-theme-switcher'],
 ];

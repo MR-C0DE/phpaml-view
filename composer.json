@@ -3,7 +3,12 @@
   "description": "Declarative frontend interfaces for PHPAML, authored in PHP.",
   "type": "library",
   "license": "MIT",
-  "keywords": ["phpaml", "frontend", "declarative-ui", "mvc"],
+  "keywords": [
+    "phpaml",
+    "frontend",
+    "declarative-ui",
+    "mvc"
+  ],
   "homepage": "https://phpaml.com",
   "support": {
     "issues": "https://github.com/MR-C0DE/phpaml-view/issues",
@@ -11,7 +16,7 @@
   },
   "require": {
     "php": "^8.2",
-    "phpaml/engine": "^0.1.0-beta.7"
+    "phpaml/engine": "^0.1.0-beta.9"
   },
   "autoload": {
     "psr-4": {
@@ -21,19 +26,107 @@
       "src/functions.php"
     ]
   },
+  "suggest": {
+    "ext-mbstring": "Unicode mb_* functions in PHP rendering, reactive text and frontend events.",
+    "ext-bcmath": "Exact decimal calculations in PHP rendering, reactive text and frontend events.",
+    "ext-intl": "Grapheme-aware text, Unicode normalization and localized number formatting in rendering and frontend events."
+  },
   "scripts": {
     "test": [
       "php tests/run.php",
       "php tests/integration.php",
-      "php tests/demo-app.php"
+      "php tests/demo-app.php",
+      "php tests/stabilization.php",
+      "php tests/language-level1.php",
+      "php tests/language-errors.php",
+      "php tests/language-level2.php",
+      "php tests/language-level345.php",
+      "php tests/language-level6.php",
+      "php tests/language-level78.php",
+      "php tests/native-functions.php",
+      "php tests/unicode.php",
+      "php tests/bcmath.php",
+      "php tests/output-functions.php",
+      "php tests/eval.php",
+      "php -d zend.assertions=1 tests/language-level10.php",
+      "php -d zend.assertions=-1 tests/language-level10.php",
+      "php tests/reactive-text.php",
+      "php tests/browser-files.php",
+      "php tests/objects.php",
+      "php tests/statics.php",
+      "php tests/magic.php",
+      "php tests/anonymous.php",
+      "php tests/introspection.php",
+      "php tests/collection-objects.php",
+      "php tests/iterators.php",
+      "php tests/generators.php",
+      "php tests/json-regex-dates.php",
+      "php tests/spl-references.php",
+      "php tests/enums.php",
+      "php tests/advanced-functions.php",
+      "php tests/compatibility-program.php",
+      "php tests/eval-bitwise.php",
+      "php tests/json-serializable.php",
+      "php tests/date-advanced.php",
+      "php tests/utility-functions.php",
+      "php tests/reservation-program.php",
+      "php tests/web-functions.php",
+      "php tests/unicode-display.php",
+      "php tests/dynamic-classes.php",
+      "php tests/frontend-program.php",
+      "php tests/language-completion.php",
+      "php tests/reactive-bindings.php",
+      "php tests/reactive-composition.php",
+      "php tests/component-forms.php",
+      "php tests/common-functions.php"
     ],
+    "test:language-runtime": [
+      "node tests/language-level1.mjs",
+      "node tests/language-errors.mjs",
+      "node tests/language-level2.mjs",
+      "node tests/language-level345.mjs",
+      "node tests/language-level6.mjs",
+      "node tests/language-level78.mjs",
+      "node tests/native-functions.mjs",
+      "node tests/unicode.mjs",
+      "node tests/bcmath.mjs",
+      "node tests/output-functions.mjs",
+      "node tests/eval.mjs",
+      "node tests/language-level10.mjs",
+      "node tests/objects.mjs",
+      "node tests/statics.mjs",
+      "node tests/magic.mjs",
+      "node tests/anonymous.mjs",
+      "node tests/introspection.mjs",
+      "node tests/collection-objects.mjs",
+      "node tests/iterators.mjs",
+      "node tests/generators.mjs",
+      "node tests/json-regex-dates.mjs",
+      "node tests/spl-references.mjs",
+      "node tests/enums.mjs",
+      "node tests/advanced-functions.mjs",
+      "node tests/compatibility-program.mjs",
+      "node tests/eval-bitwise.mjs",
+      "node tests/json-serializable.mjs",
+      "node tests/date-advanced.mjs",
+      "node tests/utility-functions.mjs",
+      "node tests/reservation-program.mjs",
+      "node tests/web-functions.mjs",
+      "node tests/unicode-display.mjs",
+      "node tests/dynamic-classes.mjs",
+      "node tests/frontend-program.mjs",
+      "node tests/language-completion.mjs",
+      "node tests/common-functions.mjs"
+    ],
+    "docs:compatibility": "php scripts/export-compatibility.php",
+    "docs:check": "php scripts/export-compatibility.php --check",
     "test:integration": "php tests/integration.php",
     "test:demo": "php tests/demo-app.php"
   },
   "extra": {
     "phpaml": {
       "type": "view-library",
-      "version": "0.1.0-beta.12"
+      "version": "0.1.0-beta.13"
     }
   }
 }

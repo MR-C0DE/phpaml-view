@@ -1,0 +1,6 @@
+{
+  "missing Countable method": "return new class implements Countable {};",
+  "missing ArrayAccess methods": "return new class implements ArrayAccess {};",
+  "count required argument": "return new class implements Countable { public function count(int $n): int { return $n; } };",
+  "narrow offset parameter": "return new class implements ArrayAccess { public function offsetExists(int $key): bool { return false; } public function offsetGet(mixed $key): mixed { return null; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} };"
+}

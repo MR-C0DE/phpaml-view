@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Views\Pages\Home;
 
 use App\Support\Copy;
-use AML\Engine\ClientAction;
-use AML\Engine\StateRef;
 use AML\View\{Page, PageMetadata, State, View};
 use AML\View\Persisted;
 use AML\View\Shared;
@@ -42,7 +40,7 @@ final class HomePage extends Page
                         Text('•••')->class('panel-controls'),
                     )->class('panel-topbar'),
                     Element('div',
-                        Text('3')->class('focus-number'),
+                        Text(count($this->tasks))->class('focus-number'),
                         VStack(Text(Copy::text('hero.ready'))->class('focus-title'), Text(Copy::text('hero.declarative'))->class('focus-copy')),
                     )->class('focus-summary'),
                     Element('div',
@@ -56,9 +54,9 @@ final class HomePage extends Page
             Section(
                 Heading(Copy::text('glance'), 2),
                 Grid(3,
-                    Element('article', Text('3')->class('metric'), Text(Copy::text('total')))->class('stat-card'),
-                    Element('article', Text('1')->class('metric'), Text(Copy::text('completed')))->class('stat-card'),
-                    Element('article', Text('2')->class('metric'), Text(Copy::text('progress')))->class('stat-card'),
+                    Element('article', Text(count($this->tasks))->class('metric'), Text(Copy::text('total')))->class('stat-card'),
+                    Element('article', Text(count(array_filter($this->tasks, static fn (array $task): bool => $task['done'])))->class('metric'), Text(Copy::text('completed')))->class('stat-card'),
+                    Element('article', Text(count(array_filter($this->tasks, static fn (array $task): bool => !$task['done'])))->class('metric'), Text(Copy::text('progress')))->class('stat-card'),
                 )->class('stats-grid'),
             )->class('section', 'shell'),
         );

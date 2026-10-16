@@ -21,55 +21,25 @@ function import(string $path): void
     StylesheetImports::add($path);
 }
 
-function textValue(string|Closure $value): View
+function textValue(mixed $value): View
 {
-    return new TextView($value);
+    return TextContent::view($value);
 }
 
-function Text(string|int|float|bool|Closure|StateRef|StateExpression|StateConditional|null $content): Element
+function Text(mixed $content): Element
 {
-    if (is_scalar($content) || $content === null) {
-        $content = NaturalStateBindings::resolve('Text', $content);
-    }
-    if ($content instanceof StateRef) {
-        return (new Element('span', new TextView((string) ($content->initial ?? ''))))
-            ->attribute('data-aml-bind', $content->name);
-    }
-    if ($content instanceof StateExpression || $content instanceof StateConditional) {
-        return (new Element('span', new TextView((string) (initialReactiveValue($content) ?? ''))))
-            ->attribute('data-aml-bind-value', json_encode(normalizeReactiveValue($content), JSON_THROW_ON_ERROR));
-    }
-    if (is_string($content) && str_contains($content, '{')) {
-        $states = StateInterpolation::current();
-        if ($states !== null) {
-            $children = [];
-            $offset = 0;
-            $matched = preg_match_all('/(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_.-]*)\}(?!\})/', $content, $matches, PREG_OFFSET_CAPTURE);
-            if ($matched === false) throw new \RuntimeException('Unable to parse AML View text interpolation.');
-            foreach ($matches[0] as $index => [$token, $position]) {
-                if ($position > $offset) $children[] = new TextView(str_replace(['{{', '}}'], ['{', '}'], substr($content, $offset, $position - $offset)));
-                $path = $matches[1][$index][0];
-                [$root] = explode('.', $path, 2);
-                if (!isset($states[$root])) {
-                    throw new \OutOfBoundsException("Unknown AML View state placeholder: {{$path}}");
-                }
-                $initial = $states[$root]->initial;
-                foreach (array_slice(explode('.', $path), 1) as $segment) {
-                    $initial = is_array($initial) && array_key_exists($segment, $initial) ? $initial[$segment] : null;
-                }
-                $reference = StateRef::to($path, $initial);
-                $children[] = (new Element('span', new TextView((string) ($reference->initial ?? ''))))
-                    ->attribute('data-aml-bind', $reference->name);
-                $offset = $position + strlen($token);
-            }
-            if ($matched > 0) {
-                if ($offset < strlen($content)) $children[] = new TextView(str_replace(['{{', '}}'], ['{', '}'], substr($content, $offset)));
-                return new Element('span', ...$children);
-            }
-            $content = str_replace(['{{', '}}'], ['{', '}'], $content);
-        }
-    }
-    return new Element('span', textValue($content instanceof Closure ? $content : (string) ($content ?? '')));
+    $content = NaturalStateBindings::resolve(__FUNCTION__, $content);
+    $view = TextContent::view($content, true);
+    return $view instanceof Element ? $view : new Element('span', $view);
+}
+
+/** @internal */
+function initialTextValue(mixed $value): string
+{
+    if ($value instanceof DisplayValue) return (string) ($value->initial ?? '');
+    if ($value instanceof StateRef) return (string) ($value->initial ?? '');
+    if ($value instanceof StateExpression || $value instanceof StateConditional) return (string) (initialReactiveValue($value) ?? '');
+    return is_scalar($value) || $value === null ? (string) ($value ?? '') : '';
 }
 
 /** @internal */
@@ -135,11 +105,12 @@ function Component(string $class, mixed ...$arguments): Component
     if (!is_subclass_of($class, Component::class)) {
         throw new \InvalidArgumentException("{$class} must extend " . Component::class . '.');
     }
-    return new $class(...$arguments);
+    return NaturalStateBindings::bindComponent(new $class(...$arguments), $arguments);
 }
 
-function Heading(string|Closure $content, int $level = 1): HeadingView
+function Heading(mixed $content, int $level = 1): HeadingView
 {
+    $content = NaturalStateBindings::resolve(__FUNCTION__, $content, 0);
     return new HeadingView(textValue($content), $level);
 }
 
@@ -223,10 +194,11 @@ function VirtualList(StateRef $items, Closure $render, string $key = 'id', int $
         ->style('height', $height . 'px')->style('overflow-y', 'auto')->style('position', 'relative');
 }
 
-function Modal(StateRef $open, string $title, View $content, ?ClientInstruction $close = null): Element
+function Modal(StateRef $open, mixed $title, View $content, ?ClientInstruction $close = null): Element
 {
+    $title = NaturalStateBindings::resolve(__FUNCTION__, $title, 1);
     $close ??= ClientAction::set($open->name, false);
-    $titleId = 'aml-modal-' . substr(sha1($open->name . $title . '|' . spl_object_id($open)), 0, 10);
+    $titleId = 'aml-modal-' . substr(sha1($open->name . initialTextValue($title) . '|' . spl_object_id($open)), 0, 10);
     $closeButton = Button('Close')->onClick($close)->attribute('data-aml-modal-close', true)->attribute('aria-label', 'Close');
     return (new Element('dialog',
         (new Element('div', Heading($title, 2)->attribute('id', $titleId), $closeButton))->class('aml-modal-header'),
@@ -296,8 +268,9 @@ function DynamicForm(StateRef $fields, Closure $render, string $key = 'id', View
         ->attribute('data-aml-dynamic-form', $fields->name);
 }
 
-function Toast(StateRef $visible, string $message, string $tone = 'info', int $duration = 4000): Element
+function Toast(StateRef $visible, mixed $message, string $tone = 'info', int $duration = 4000): Element
 {
+    $message = NaturalStateBindings::resolve(__FUNCTION__, $message, 1);
     if (!in_array($tone, ['info', 'success', 'warning', 'error'], true)) throw new \InvalidArgumentException("Unsupported toast tone: {$tone}");
     if ($duration < 0 || $duration > 60_000) throw new \InvalidArgumentException('Toast duration must be between 0 and 60000 milliseconds.');
     return (new Element('div', Text($message)))
@@ -309,9 +282,10 @@ function Toast(StateRef $visible, string $message, string $tone = 'info', int $d
         ->attribute('data-aml-tone', $tone)->transition('slide');
 }
 
-function Dropdown(StateRef $open, string $label, View ...$items): Element
+function Dropdown(StateRef $open, mixed $label, View ...$items): Element
 {
-    $id = 'aml-menu-' . substr(sha1($open->name . '|' . $label . '|' . spl_object_id($open)), 0, 10);
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 1);
+    $id = 'aml-menu-' . substr(sha1($open->name . '|' . initialTextValue($label) . '|' . spl_object_id($open)), 0, 10);
     return (new Element('div',
         Button($label)->attribute('aria-haspopup', 'menu')->attribute('aria-controls', $id)->attribute('aria-expanded', (bool) $open->initial ? 'true' : 'false')
             ->attribute('data-aml-disclosure-trigger', json_encode(['state' => $open->name], JSON_THROW_ON_ERROR)),
@@ -320,15 +294,17 @@ function Dropdown(StateRef $open, string $label, View ...$items): Element
     ))->attribute('data-aml-dropdown', true);
 }
 
-function MenuItem(string $label, ?ClientInstruction $action = null): Element
+function MenuItem(mixed $label, ?ClientInstruction $action = null): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     $item = Button($label)->attribute('role', 'menuitem')->attribute('tabindex', '-1');
     return $action === null ? $item : $item->onClick($action);
 }
 
-function Tooltip(string $label, View $content): Element
+function Tooltip(mixed $label, View $content): Element
 {
-    $id = 'aml-tooltip-' . substr(sha1($label . '|' . spl_object_id($content)), 0, 10);
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
+    $id = 'aml-tooltip-' . substr(sha1(initialTextValue($label) . '|' . spl_object_id($content)), 0, 10);
     $trigger = $content instanceof Element
         ? $content->attribute('aria-describedby', $id)->attribute('data-aml-tooltip-trigger', true)
         : (new Element('span', $content))->attribute('tabindex', '0')->attribute('aria-describedby', $id)->attribute('data-aml-tooltip-trigger', true);
@@ -338,13 +314,14 @@ function Tooltip(string $label, View $content): Element
     ))->attribute('data-aml-tooltip', true);
 }
 
-function Popover(StateRef $open, string $label, View $content): Element
+function Popover(StateRef $open, mixed $label, View $content): Element
 {
-    $id = 'aml-popover-' . substr(sha1($open->name . '|' . $label . '|' . spl_object_id($open)), 0, 10);
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 1);
+    $id = 'aml-popover-' . substr(sha1($open->name . '|' . initialTextValue($label) . '|' . spl_object_id($open)), 0, 10);
     return (new Element('span',
-        Button($label)->attribute('aria-haspopup', 'dialog')->attribute('aria-controls', $id)->attribute('aria-expanded', (bool) $open->initial ? 'true' : 'false')
+        Button($label)->attribute('id', $id . '-trigger')->attribute('aria-haspopup', 'dialog')->attribute('aria-controls', $id)->attribute('aria-expanded', (bool) $open->initial ? 'true' : 'false')
             ->attribute('data-aml-disclosure-trigger', json_encode(['state' => $open->name], JSON_THROW_ON_ERROR)),
-        (new Element('div', $content))->attribute('id', $id)->attribute('role', 'dialog')->attribute('aria-label', $label)->attribute('hidden', !(bool) $open->initial)
+        (new Element('div', $content))->attribute('id', $id)->attribute('role', 'dialog')->attribute('aria-labelledby', $id . '-trigger')->attribute('hidden', !(bool) $open->initial)
             ->attribute('data-aml-disclosure-panel', json_encode(['state' => $open->name, 'kind' => 'popover'], JSON_THROW_ON_ERROR)),
     ))->attribute('data-aml-popover', true);
 }
@@ -531,10 +508,11 @@ function Figure(View ...$children): Element
     return new Element('figure', ...$children);
 }
 
-function FigCaption(string|Closure|StateRef|View ...$children): Element
+function FigCaption(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('figcaption', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
@@ -556,26 +534,30 @@ function safeLinkHref(string $href): string
     return $href;
 }
 
-function Link(string|Closure $label, string $href): Element
+function Link(mixed $label, string $href): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     return (new Element('a', textValue($label)))->attribute('href', safeLinkHref($href));
 }
 
-function ExternalLink(string|Closure $label, string $href): Element
+function ExternalLink(mixed $label, string $href): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     return Link($label, $href)->target('_blank')->rel('noopener', 'noreferrer');
 }
 
-function EmailLink(string|Closure $label, string $email): Element
+function EmailLink(mixed $label, string $email): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
         throw new \InvalidArgumentException("Invalid email address: {$email}");
     }
     return Link($label, 'mailto:' . $email);
 }
 
-function PhoneLink(string|Closure $label, string $number): Element
+function PhoneLink(mixed $label, string $number): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     $normalized = preg_replace('/[\s().-]+/', '', $number) ?? '';
     if (preg_match('/^\+?[0-9]{3,15}$/', $normalized) !== 1) {
         throw new \InvalidArgumentException("Invalid phone number: {$number}");
@@ -583,8 +565,9 @@ function PhoneLink(string|Closure $label, string $number): Element
     return Link($label, 'tel:' . $normalized);
 }
 
-function DownloadLink(string|Closure $label, string $href, ?string $filename = null): Element
+function DownloadLink(mixed $label, string $href, ?string $filename = null): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     return Link($label, $href)->download($filename);
 }
 
@@ -626,16 +609,18 @@ function Area(string $shape, string $coordinates, string $href, string $alt): El
         ->attribute('alt', $alt);
 }
 
-function Canvas(string|Closure|StateRef|View ...$fallback): Element
+function Canvas(mixed ...$fallback): Element
 {
+    $fallback = NaturalStateBindings::resolveArguments(__FUNCTION__, $fallback, true);
     return new Element('canvas', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $fallback,
     ));
 }
 
-function Alert(string|Closure $message, ActionStatus $status = ActionStatus::Idle): Element
+function Alert(mixed $message, ActionStatus $status = ActionStatus::Idle): Element
 {
+    $message = NaturalStateBindings::resolve(__FUNCTION__, $message, 0);
     return (new Element('div', textValue($message)))
         ->attribute('role', in_array($status, [ActionStatus::Error, ActionStatus::Warning], true) ? 'alert' : 'status')
         ->attribute('data-aml-status', $status->value);
@@ -651,8 +636,9 @@ function Div(View ...$children): Element
     return new Element('div', ...$children);
 }
 
-function Span(string|Closure|StateRef|View ...$children): Element
+function Span(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('span', $children);
 }
 
@@ -671,8 +657,9 @@ function Details(View ...$children): Element
     return new Element('details', ...$children);
 }
 
-function Summary(string|Closure|StateRef|View ...$children): Element
+function Summary(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('summary', $children);
 }
 
@@ -686,8 +673,9 @@ function LineBreak(): Element
     return new Element('br');
 }
 
-function NoScript(string|Closure|StateRef|View ...$children): Element
+function NoScript(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('noscript', $children);
 }
 
@@ -726,26 +714,29 @@ function Footer(View ...$children): Element
     return new Element('footer', ...$children);
 }
 
-function Paragraph(string|Closure|StateRef|View ...$children): Element
+function Paragraph(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('p', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
 
-function Strong(string|Closure|StateRef|View ...$children): Element
+function Strong(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('strong', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
 
-function Emphasis(string|Closure|StateRef|View ...$children): Element
+function Emphasis(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('em', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
@@ -754,97 +745,114 @@ function Emphasis(string|Closure|StateRef|View ...$children): Element
 function semanticTextElement(string $tag, array $children): Element
 {
     return new Element($tag, ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
 
-function SmallText(string|Closure|StateRef|View ...$children): Element
+function SmallText(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('small', $children);
 }
 
-function MarkedText(string|Closure|StateRef|View ...$children): Element
+function MarkedText(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('mark', $children);
 }
 
-function DeletedText(string|Closure|StateRef|View ...$children): Element
+function DeletedText(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('del', $children);
 }
 
-function InsertedText(string|Closure|StateRef|View ...$children): Element
+function InsertedText(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('ins', $children);
 }
 
-function Subscript(string|Closure|StateRef|View ...$children): Element
+function Subscript(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('sub', $children);
 }
 
-function Superscript(string|Closure|StateRef|View ...$children): Element
+function Superscript(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('sup', $children);
 }
 
-function InlineCode(string|Closure|StateRef|View ...$children): Element
+function InlineCode(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('code', $children);
 }
 
-function CodeBlock(string|Closure|StateRef|View ...$children): Element
+function CodeBlock(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('pre', semanticTextElement('code', $children));
 }
 
-function Quote(string|Closure|StateRef|View ...$children): Element
+function Quote(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('q', $children);
 }
 
-function BlockQuote(View ...$children): Element
+function BlockQuote(mixed ...$children): Element
 {
-    return new Element('blockquote', ...$children);
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
+    return semanticTextElement('blockquote', $children);
 }
 
-function Abbreviation(string|Closure $label, string $meaning): Element
+function Abbreviation(mixed $label, string $meaning): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     if (trim($meaning) === '') throw new \InvalidArgumentException('An abbreviation requires its expanded meaning.');
     return (new Element('abbr', textValue($label)))->attribute('title', $meaning);
 }
 
-function Time(string|Closure $label, string $dateTime): Element
+function Time(mixed $label, string $dateTime): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     if (trim($dateTime) === '') throw new \InvalidArgumentException('A time element requires a machine-readable datetime.');
     return (new Element('time', textValue($label)))->attribute('datetime', $dateTime);
 }
 
-function Address(string|Closure|StateRef|View ...$children): Element
+function Address(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('address', $children);
 }
 
-function KeyboardInput(string|Closure|StateRef|View ...$children): Element
+function KeyboardInput(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('kbd', $children);
 }
 
-function SampleOutput(string|Closure|StateRef|View ...$children): Element
+function SampleOutput(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('samp', $children);
 }
 
-function Variable(string|Closure|StateRef|View ...$children): Element
+function Variable(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return semanticTextElement('var', $children);
 }
 
-function ListItem(string|Closure|StateRef|View ...$children): Element
+function ListItem(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('li', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
@@ -864,10 +872,11 @@ function Table(View ...$children): Element
     return new Element('table', ...$children);
 }
 
-function Caption(string|Closure|StateRef|View ...$children): Element
+function Caption(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('caption', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
@@ -892,18 +901,20 @@ function TableRow(View ...$cells): Element
     return new Element('tr', ...$cells);
 }
 
-function TableHeader(string|Closure|StateRef|View ...$children): Element
+function TableHeader(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('th', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
 
-function TableCell(string|Closure|StateRef|View ...$children): Element
+function TableCell(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('td', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
@@ -921,17 +932,17 @@ function TableColumn(int $span = 1): Element
     return (new Element('col'))->attribute('span', $span === 1 ? null : $span);
 }
 
-function Action(string|Closure|StateRef|StateExpression|StateConditional $label, ?ClientInstruction $action = null): Element
+function Action(mixed $label, ?ClientInstruction $action = null): Element
 {
-    $content = $label instanceof StateRef || $label instanceof StateExpression || $label instanceof StateConditional
-        ? Text($label)
-        : textValue($label);
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
+    $content = textValue($label);
     $button = (new Element('button', $content))->attribute('type', 'button');
     return $action === null ? $button : $button->onClick($action);
 }
 
-function Button(string|Closure|StateRef|StateExpression|StateConditional $label, ?ClientInstruction $action = null): Element
+function Button(mixed $label, ?ClientInstruction $action = null): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     return Action($label, $action);
 }
 
@@ -1114,6 +1125,7 @@ function UploadForm(View ...$children): Element
 
 function Input(string $name = '', string $type = 'text', string|int|float|bool|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 2);
     $input = (new Element('input'))->type($type);
     if ($name !== '') $input->name($name);
     return $value === null ? $input : $input->value($value);
@@ -1121,11 +1133,13 @@ function Input(string $name = '', string $type = 'text', string|int|float|bool|S
 
 function TextField(string $name = '', string|int|float|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'text', $value);
 }
 
 function EmailInput(string $name = '', string|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'email', $value)->email();
 }
 
@@ -1136,21 +1150,25 @@ function PasswordInput(string $name = ''): Element
 
 function NumberInput(string $name = '', int|float|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'number', $value);
 }
 
 function DateInput(string $name = '', string|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'date', $value);
 }
 
 function SearchInput(string $name = '', string|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'search', $value);
 }
 
 function HiddenInput(string $name = '', string|int|float|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     return Input($name, 'hidden', $value);
 }
 
@@ -1169,18 +1187,21 @@ function FileInput(string $name, array $accept = [], bool $multiple = false, ?St
     }
     if ($files !== null && !is_array($files->initial)) throw new \InvalidArgumentException('A file input must bind to an array state.');
     $input = Input($name, 'file')->attribute('accept', $accept === [] ? null : implode(',', $accept))->attribute('multiple', $multiple);
+    $input->attribute('data-aml-file-source', \AML\Engine\BrowserFiles::source($name));
     return $files === null ? $input : $input->bindClient($files->name);
 }
 
 function TextArea(string $name = '', string|StateRef|null $value = null): Element
 {
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
     $textarea = new Element('textarea');
     if ($name !== '') $textarea->name($name);
     return $value === null ? $textarea : $textarea->value($value);
 }
 
-function Label(string|Closure $label, string $for): Element
+function Label(mixed $label, string $for): Element
 {
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
     return (new Element('label', textValue($label)))->attribute('for', $for);
 }
 
@@ -1189,16 +1210,18 @@ function Fieldset(View ...$children): Element
     return new Element('fieldset', ...$children);
 }
 
-function Legend(string|Closure|StateRef|View ...$children): Element
+function Legend(mixed ...$children): Element
 {
+    $children = NaturalStateBindings::resolveArguments(__FUNCTION__, $children, true);
     return new Element('legend', ...array_map(
-        static fn (string|Closure|StateRef|View $child): View => $child instanceof View ? $child : Text($child),
+        static fn (mixed $child): View => TextContent::view($child, true),
         $children,
     ));
 }
 
 function Checkbox(string $name = '', bool|StateRef $checked = false, string $value = '1'): Element
 {
+    $checked = NaturalStateBindings::resolve(__FUNCTION__, $checked, 1);
     $input = (new Element('input'))
         ->type('checkbox')
         ->attribute('value', $value);
@@ -1207,23 +1230,26 @@ function Checkbox(string $name = '', bool|StateRef $checked = false, string $val
 }
 
 /** @param array<string|int, string> $options */
-function Select(string $name, array $options, string|int|null $selected = null): Element
+function Select(string $name, array $options, string|int|StateRef|null $selected = null): Element
 {
+    [$options, $selected] = array_values(NaturalStateBindings::resolveArguments(__FUNCTION__, [1 => $options, 2 => $selected]));
+    $initial = $selected instanceof StateRef ? $selected->initial : $selected;
     $choices = [];
     foreach ($options as $value => $label) {
-        $choices[] = (new Element('option', textValue($label)))
+        $choices[] = TextContent::plainElement('option', $label)
             ->attribute('value', (string) $value)
-            ->attribute('selected', (string) $value === (string) $selected);
+            ->attribute('selected', (string) $value === (string) $initial);
     }
 
     return (new Element('select', ...$choices))
         ->attribute('name', $name)
-        ->attribute('data-aml-value', $selected);
+        ->value($selected);
 }
 
-function Option(string $value, ?string $label = null, bool $selected = false): Element
+function Option(string $value, mixed $label = null, bool $selected = false): Element
 {
-    return (new Element('option', textValue($label ?? $value)))
+    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 1);
+    return TextContent::plainElement('option', $label ?? $value)
         ->attribute('value', $value)
         ->attribute('selected', $selected);
 }
@@ -1233,9 +1259,10 @@ function Datalist(string $id, Element ...$options): Element
     return (new Element('datalist', ...$options))->id($id);
 }
 
-function Output(string $name, string|Closure|StateRef|View $content = ''): Element
+function Output(string $name, mixed $content = ''): Element
 {
-    $view = $content instanceof View ? $content : Text($content);
+    $content = NaturalStateBindings::resolve(__FUNCTION__, $content, 1);
+    $view = textValue($content);
     return (new Element('output', $view))->attribute('name', $name);
 }
 

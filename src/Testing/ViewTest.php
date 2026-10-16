@@ -31,7 +31,7 @@ final class ViewTest
                 throw new TestExpectationFailed("Expected {$exception}, received " . $error::class . '.', previous: $error);
             }
             if ($message !== null && !str_contains($error->getMessage(), $message)) {
-                throw new TestExpectationFailed("Exception message does not contain: {$message}", previous: $error);
+                throw new TestExpectationFailed("Exception message does not contain: {$message}; received: " . $error->getMessage(), previous: $error);
             }
             return $error;
         }

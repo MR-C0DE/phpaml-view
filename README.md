@@ -2,11 +2,16 @@
 
 Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
-> Status: `0.1.0-beta.12`. The public API is ready for real-world evaluation,
+See the [seven language extensions and their exact scope](docs/fr/extensions-langage.md).
+
+> Status: `0.1.0-beta.13`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
 [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+
+Frontend error handling: [level 10 guide](docs/fr/niveau-10-erreurs-exceptions.md)
+and [service exception example](examples/niveau-10/page.php).
 
 ## Why AML View?
 
@@ -58,7 +63,7 @@ final class CounterPage extends Page
 ```
 
 The common path intentionally needs neither `StateRef` nor `ClientAction`.
-Passing a `#[State]` property directly to `Text()` keeps it reactive. Passing it
+Passing a `#[State]` property to a native text component keeps it reactive. Passing it
 directly to a form control's `value()` creates a two-way binding:
 
 ```php
@@ -86,6 +91,21 @@ Text('Hello {profile.name}');
 Placeholders must resolve to a property marked with `#[State]`. Nested array
 paths are supported and remain HTML-escaped. Use doubled braces when text must
 contain a literal placeholder, for example `Text('Example: {{count}}')`.
+
+The same text pipeline handles native headings, paragraphs, emphasis, labels,
+buttons, links, overlays and option labels:
+
+```php
+Paragraph('Hello ' . $this->name);
+Heading("Hello {$this->name}", 2);
+Strong('{name}, and again {name}');
+Text(number_format($this->price * $this->quantity, 2));
+Text(fn () => $prefix . $this->name);
+```
+
+Display functions are read-only and use the supported frontend grammar.
+See the [reactive text guide](docs/fr/textes-reactifs.md) for the full component
+list, local captures, literal braces, diagnostics and compiler boundaries.
 
 Simple frontend mutations can be written as ordinary PHP closures:
 
@@ -170,8 +190,8 @@ array_pop($this->tasks);
 array_shift($this->tasks);
 ```
 
-Only these explicitly supported collection operations are compiled; arbitrary
-PHP function calls remain rejected.
+Collection operations use the closed native catalogue. Loaded user functions
+and service methods can also be compiled; see the [compatibility matrix](docs/fr/compatibilite.md).
 Keep each frontend closure on its own lines so its source is unambiguous.
 
 Conditions use ordinary PHP syntax and compile to safe Engine branches:
@@ -189,6 +209,50 @@ Button('Evaluate')->onClick(function (): void {
 The initial condition grammar supports boolean states and comparisons with
 scalar literals, state values or calculated local expressions: `==`, `===`,
 `!=`, `!==`, `>`, `>=`, `<` and `<=`.
+
+## Frontend variables and scalar types
+
+Frontend handlers support invocation-local variables, PHP scalar casts,
+`gettype()`, browser-console `var_dump()`, file and component constants, and
+single/double-quoted strings with interpolation and PHP escapes. Local
+assignments snapshot their values instead of retaining live state references.
+Use View beta.13 together with Engine beta.9. CLI beta.45 selects these
+compatible minimum versions when creating a View application. See the
+[Level 1 guide (French)](docs/fr/niveau-1-variables-types.md) for examples,
+precise limits, and the native-PHP/runtime parity check.
+
+## Frontend operators
+
+Compiled handlers and effects support arithmetic, power, PHP strict/loose comparisons,
+logical short circuits, ternaries, null coalescing and pre/post increments.
+See the [French level 2 guide](docs/fr/niveau-2-operateurs.md) for precedence,
+assignment expressions, examples and runtime limits.
+
+## Frontend conditions, loops and arrays
+
+Handlers support `switch`, strict `match`, `empty()` and multi-argument `isset()`.
+`for`, `while`, `do...while` and `foreach` execute against current event state,
+with nested loop controls and runtime iteration limits. PHP arrays preserve keys,
+insertion order, numeric kinds and value-copy behavior across local assignments,
+callbacks, destructuring and spread expressions. `echo` writes only to the browser
+console. See the [levels 3–5 guide (French)](docs/fr/niveaux-3-5-conditions-boucles-tableaux.md)
+for examples, diagnostics and the supported subset.
+
+## Functions and services
+
+Frontend events can call user functions loaded from separate PHP service files,
+component methods and loaded static methods. Calls have private frames, real
+returns, typed/default/named/variadic parameters, references and closures.
+Recursion is bounded; synchronous failures restore component state. Function
+bodies are compiled without executing application code. See the
+[level 6 guide (French)](docs/fr/niveau-6-fonctions.md) for examples and limits.
+
+Selected PHP string and numeric builtins also compile into events, including
+trimming, validation, byte lengths, replacement, splitting/joining, rounding,
+secure random integers and amount formatting. Terminal streams, command arguments
+and process exits remain PHP CLI features; browser input uses controls and state.
+See [levels 7–8 (French)](docs/fr/niveaux-7-8-entrees-chaines-nombres.md) and the
+[input/menu example](examples/niveaux-7-8/page.php), which calculates prices in cents.
 
 ## Bound and validated forms
 
@@ -626,8 +690,9 @@ Effect(function (): void {
 }, [$this->state('counter')], runOnMount: false);
 ```
 
-Only `Console::log()`, `Console::warning()` and `Console::error()` are allowed
-as static calls. PHP methods and arbitrary static calls remain rejected.
+`Console::log()`, `Console::warning()` and `Console::error()` write to the browser
+console. Loaded service static methods can also be compiled when their bodies
+use the supported frontend language.
 
 ### Action status without manual state
 
@@ -793,7 +858,7 @@ and resizing in the browser. Sortable collections support pointer drag and drop
 as well as `Alt+ArrowUp` and `Alt+ArrowDown`; moves never cross collection state
 boundaries. Transitions automatically honor reduced-motion preferences.
 
-No PHP closure or arbitrary expression is evaluated in the browser.
+PHP closure bodies compile into Engine instructions. Explicit `eval()` uses the same instruction set, with an optional PHP parser for dynamic strings; it never invokes JavaScript eval.
 
 Several related mutations can be applied atomically with one render:
 
@@ -900,6 +965,16 @@ and content again on the server.
 
 ## Demo and tests
 
+Frontend integration is also checked from installed Composer distributions in
+Chromium, Firefox and WebKit, with both the complete and modular Engine runtimes.
+For a matching sibling Engine checkout, run `npm run test:browser:runtimes` and
+`npm run test:packages` from that checkout. The package runner creates candidate
+release ZIPs, installs them in isolation, checks their assets and runs the complete
+task, reservation and compatibility examples. It does not publish packages.
+The `frontend-packages` CI job repeats this on View changes; the repository
+variable `PHPAML_ENGINE_TEST_REF` selects the matching Engine revision (default
+`main`). See Engine's README for prerequisites and local overrides.
+
 ## Construction-free view trees
 
 Application code does not need to expose object construction. Generic elements
@@ -953,3 +1028,54 @@ models, metadata and client-side navigation.
 ## License
 
 AML View is released under the MIT License.
+
+## Native PHP functions
+
+View and Engine share a [closed native catalogue](docs/fr/compatibilite.md#catalogue-natif). Math, string,
+array and scalar helpers support browser events and pure reactive displays;
+object member introspection runs in events. See the
+[function catalogue and browser limits](docs/fr/fonctions-natives.md) and the
+[working example](examples/fonctions-natives/page.php).
+
+The [Unicode guide](docs/fr/unicode.md) covers 28 UTF-8 `mb_*` functions and a
+[reactive example](examples/unicode/page.php). PHP rendering requires ext-mbstring.
+
+The [BCMath guide](docs/fr/bcmath.md) covers 14 exact decimal functions, rounding
+and event-local scale. See the [decimal total example](examples/calcul-decimal/page.php).
+
+The [output guide](docs/fr/sorties-console.md) covers `print_r()` and `var_export()`
+in events and reactive text, with a [working example](examples/sorties-console/page.php).
+
+The [eval guide](docs/fr/eval.md) covers static and dynamic PHP text in frontend events,
+shared local scope, catchable errors, limits and the optional parser asset.
+
+The [service object guide](docs/fr/objets.md) describes frontend constructors, typed properties, inheritance and method calls, with a [complete cart example](examples/objets/page.php). Service static properties have component-local storage across events, including stored objects and closures; publish scalar or array results through State. See the [two-counter example](examples/proprietes-statiques/page.php).
+
+The [magic methods guide](docs/fr/methodes-magiques.md) covers service hooks for properties, methods, invokable objects, strings and cloning. The [introspection guide](docs/fr/introspection.md) adds `__debugInfo()`. See the [profile example](examples/methodes-magiques/page.php).
+
+Anonymous classes and intersection/DNF contracts are supported in frontend events and services. See the [guide](docs/fr/classes-anonymes-intersections.md) and [profile example](examples/classes-anonymes/page.php).
+
+The [object introspection guide](docs/fr/introspection.md) covers native object helpers, compiled enum detection and `__debugInfo()` console output. See the [working example](examples/introspection/page.php).
+
+The [collection objects guide](docs/fr/collections.md) covers `Countable`, `ArrayAccess`, `is_countable()` and direct/indirect offset operations. See the [shopping-cart example](examples/collections/page.php).
+
+The [iterator guide](docs/fr/iterateurs.md) covers `Iterator`, `IteratorAggregate`, `Traversable`, `iterable` and `is_iterable()`, including bounded `foreach` traversal. See the [working collection example](examples/iterateurs/page.php).
+
+The [generator guide](docs/fr/generateurs.md) covers lazy `yield`/`yield from`, suspension inside expressions, `send`, `throw`, `getReturn`, component-local lifetime and explicit cleanup boundaries. See the [catalogue example](examples/generateurs/page.php).
+
+The [compatibility matrix](docs/fr/compatibilite.md) is the entry point for the
+supported language and remaining boundaries. Its native function list is generated
+from Engine with `composer docs:compatibility` and checked with `composer docs:check`.
+The [combined example](examples/compatibilite/page.php) calls a
+[service](examples/compatibilite/service.php) using JSON, regular expressions,
+dates, SPL collections and enums together.
+
+The [reservation example](docs/fr/reservation.md) combines form validation,
+`createFromFormat`, calendar intervals and periods, named callback arguments and
+`JsonSerializable` in a separate service. See the [date guide](docs/fr/dates-avancees.md)
+and [validation and callable utilities](docs/fr/utilitaires.md) for their exact limits.
+
+The [URL, Unicode and dynamic-class guide](docs/fr/web-unicode-dynamique.md) covers
+URL/Base64 helpers, `filter_var_array`, grapheme-safe reactive text, normalization,
+localized numbers and currencies, dynamic class targets and complete nullsafe
+receiver chains. See the [combined profile example](examples/profil-unicode/page.php).

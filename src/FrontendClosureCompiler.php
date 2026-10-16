@@ -10,6 +10,13 @@ use AML\Engine\ClientInstruction;
 use AML\Engine\StateRef;
 use AML\Engine\StateExpression;
 use AML\Engine\StateConditional;
+use AML\Engine\LocalAction;
+use AML\Engine\LocalScope;
+use AML\Engine\ConsoleAction;
+use AML\Engine\SourceInstruction;
+use AML\Engine\ExpressionAction;
+use AML\Engine\FlowAction;
+use AML\Engine\LoopControlAction;
 use Closure;
 
 /**
@@ -18,7 +25,21 @@ use Closure;
  */
 final class FrontendClosureCompiler
 {
-    private const MAX_LOOP_ITERATIONS = 100;
+    use FrontendControlFlowCompiler;
+    use FrontendFunctionCompiler;
+    use FrontendBuiltinCompiler;
+    use FrontendDisplayCompiler;
+    use FrontendDisplayLocals;
+    use FrontendExceptionCompiler;
+    use FrontendEvalCompiler;
+    use FrontendObjectCompiler;
+    use FrontendDynamicObjectCompiler;
+    use FrontendSplCompiler;
+    use FrontendEnumCompiler;
+    use FrontendAnonymousClassCompiler;
+
+    private const MAX_LOOP_ITERATIONS = 1000;
+    private static int $valueDepth = 0;
 
     public static function compile(Closure $closure): ClientInstruction
     {
@@ -27,18 +48,47 @@ final class FrontendClosureCompiler
             throw new \LogicException('Frontend closures can only be declared while rendering an AML View component.');
         }
 
-        $body = self::expandLocalMethodCalls(
-            self::bodyTokens($closure),
-            (new \ReflectionFunction($closure))->getClosureThis(),
-        );
-        $locals = [];
-        $actions = self::instructions($body, $states, $locals);
-        if ($actions === []) throw new \InvalidArgumentException('A frontend event closure cannot be empty.');
-        return count($actions) === 1 ? $actions[0] : Actions::sequence(...$actions);
+        $previous = [self::$functions, self::$functionContext, self::$functionStates, self::$nestedNames, self::$functionAllowsThis, self::$classes, self::$objectScope, self::$displayComponent];
+        self::$functions = []; self::$nestedNames = []; self::$classes = []; self::$objectScope = null;
+        self::$functionContext = new \ReflectionFunction($closure);
+        self::$functionAllowsThis = self::$functionContext->getClosureThis() !== null;
+        self::$functionStates = $states;
+        $owner = self::$functionContext->getClosureThis();
+        self::$displayComponent = $owner instanceof Component && NaturalStateBindings::properties($owner) !== [] ? $owner : null;
+        try {
+            $body = self::bodyTokens($closure);
+            if (self::$displayComponent !== null) $body = self::displayProperties($body, self::$displayComponent, self::sourceLocation(self::$functionContext), false);
+            self::predeclareFunctions($body);
+            $locals = [];
+            $initializers = [];
+            $captures = (new \ReflectionFunction($closure))->getStaticVariables();
+            foreach ($captures as $name => $value) {
+                if (\ReflectionReference::fromArrayElement($captures, $name) !== null) {
+                    throw new \InvalidArgumentException('Frontend captures cannot be passed by reference.');
+                }
+                self::assertLocalName($name);
+                $value = $value instanceof Closure ? self::capturedClosure($value) : self::literalValue($value);
+                $locals[$name] = new FrontendLocal($name, $value);
+                $initializers[] = new LocalAction($locals[$name]->id(), $value);
+            }
+            $actions = [...$initializers, ...self::instructions($body, $states, $locals)];
+            if ($actions === []) throw new \InvalidArgumentException('A frontend event closure cannot be empty.');
+            $action = Actions::sequence(...$actions);
+            // Every invocation owns its locals, including effects and nested handlers.
+            $json = $action->json();
+            self::validateStaticLocals(json_decode($json, true));
+            if (self::containsYield(json_decode($json, true))) throw new \InvalidArgumentException('An event cannot itself yield; call a generator function and iterate it inside the event.');
+            return self::$classes !== [] || str_contains($json, '"operation":"eval"') || self::$functions !== [] || str_contains($json, '"type":"return"') || str_contains($json, '"type":"local-set"') || str_contains($json, '"$local"') || str_contains($json, '"operation":"gettype"') || str_contains($json, '"level":"dump"')
+                ? new LocalScope($action, self::$functions, self::$classes, self::$classes === [] && !str_contains($json, '"operation":"staticLocal"') && !str_contains(json_encode(self::$functions), '"operation":"staticLocal"') ? null : FrontendServiceScope::mark()) : $action;
+        } catch (\Throwable $error) {
+            throw self::locatedError($error, self::sourceLocation(new \ReflectionFunction($closure)));
+        } finally {
+            [self::$functions, self::$functionContext, self::$functionStates, self::$nestedNames, self::$functionAllowsThis, self::$classes, self::$objectScope, self::$displayComponent] = $previous;
+        }
     }
 
     /** @return list<array{id: int|string, text: string}> */
-    private static function bodyTokens(Closure $closure): array
+    private static function bodyTokens(Closure $closure, ?bool &$isArrow = null): array
     {
         $reflection = new \ReflectionFunction($closure);
         $file = $reflection->getFileName();
@@ -50,13 +100,18 @@ final class FrontendClosureCompiler
         $source = implode('', array_slice($lines, $reflection->getStartLine() - 1, $reflection->getEndLine() - $reflection->getStartLine() + 1));
         $raw = token_get_all("<?php\n" . $source);
         $tokens = [];
+        $line = $reflection->getStartLine() - 1; $offset = strlen(implode('', array_slice($lines, 0, $reflection->getStartLine() - 1))) - 6;
+        $origin = self::sourceLocation($reflection);
         foreach ($raw as $token) {
             $id = is_array($token) ? $token[0] : $token;
             $text = is_array($token) ? $token[1] : $token;
+            $startLine = $line; $startOffset = $offset; $offset += strlen($text);
+            $line += substr_count($text, "\n");
             if (in_array($id, [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) continue;
-            $tokens[] = ['id' => $id, 'text' => $text];
+            $tokens[] = ['id' => $id, 'text' => $text, 'offset' => $startOffset, 'source' => [...$origin, 'line' => $startLine]];
         }
 
+        $tokens = self::resolveConstants(self::packStrings($tokens), $reflection);
         $function = null;
         $arrow = false;
         foreach ($tokens as $index => $token) {
@@ -65,12 +120,16 @@ final class FrontendClosureCompiler
                 if ($function === $index) $arrow = true;
             }
             if ($token['id'] === T_FUNCTION) {
+                $next = $index + 1;
+                if (($tokens[$next]['text'] ?? '') === '&') $next++;
+                // Reflection lines can also contain an enclosing named method.
+                if (str_contains($reflection->getName(), '{closure') && ($tokens[$next]['text'] ?? '') !== '(') continue;
                 $function ??= $index;
             }
         }
         if ($function === null) throw new \InvalidArgumentException('Unable to locate the frontend event closure.');
-        // Additional arrow functions are allowed only when the expression
-        // compiler consumes them as callbacks of an allowlisted operation.
+        $isArrow = $arrow;
+        // Nested functions are parsed by the expression and statement compilers.
 
         if ($arrow) {
             $start = null;
@@ -82,8 +141,8 @@ final class FrontendClosureCompiler
             $depth = 0;
             for ($index = $start; $index < count($tokens); $index++) {
                 $text = $tokens[$index]['text'];
-                if (in_array($text, ['(', '['], true)) { $depth++; $body[] = $tokens[$index]; continue; }
-                if (in_array($text, [')', ']'], true)) {
+                if (in_array($text, ['(', '[', '{'], true)) { $depth++; $body[] = $tokens[$index]; continue; }
+                if (in_array($text, [')', ']', '}'], true)) {
                     if ($depth === 0) break;
                     $depth--; $body[] = $tokens[$index]; continue;
                 }
@@ -112,94 +171,14 @@ final class FrontendClosureCompiler
         throw new \InvalidArgumentException('The frontend event closure is not closed.');
     }
 
-    /**
-     * Inline calls such as fn () => $this->append('8') before compiling the
-     * deliberately small frontend subset. The PHP method itself is never run.
-     *
-     * @param list<array{id: int|string, text: string}> $tokens
-     * @param list<string> $stack
-     * @return list<array{id: int|string, text: string}>
-     */
-    private static function expandLocalMethodCalls(array $tokens, ?object $scope, array $stack = []): array
-    {
-        if ($scope === null) return $tokens;
-
-        for ($index = 0; $index < count($tokens) - 4; $index++) {
-            $instanceCall = ($tokens[$index]['id'] ?? null) === T_VARIABLE
-                && $tokens[$index]['text'] === '$this'
-                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR;
-            $staticTarget = strtolower($tokens[$index]['text'] ?? '');
-            $scopeClass = new \ReflectionClass($scope);
-            $staticCall = in_array(($tokens[$index]['id'] ?? null), [T_STRING, T_STATIC], true)
-                && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON
-                && in_array($staticTarget, ['self', 'static', strtolower($scopeClass->getShortName()), strtolower($scopeClass->getName())], true);
-            if ((!$instanceCall && !$staticCall)
-                || ($tokens[$index + 2]['id'] ?? null) !== T_STRING
-                || ($tokens[$index + 3]['text'] ?? null) !== '(') {
-                continue;
-            }
-
-            $methodName = $tokens[$index + 2]['text'];
-            if (!method_exists($scope, $methodName)) continue;
-
-            [$argumentTokens, $afterArguments] = self::delimited($tokens, $index + 3, '(', ')');
-            if (($tokens[$afterArguments]['text'] ?? null) !== ';') {
-                throw new \InvalidArgumentException("A local frontend method call must be a complete statement: {$methodName}().");
-            }
-            if (in_array($methodName, $stack, true)) {
-                throw new \InvalidArgumentException("Recursive frontend method calls are not supported: {$methodName}().");
-            }
-
-            $method = new \ReflectionMethod($scope, $methodName);
-            if (($staticCall && !$method->isStatic()) || ($instanceCall && $method->isStatic())
-                || $method->isAbstract() || $method->isConstructor() || $method->isDestructor()) {
-                throw new \InvalidArgumentException("Unsupported local frontend method: {$methodName}().");
-            }
-            $returnType = $method->getReturnType();
-            if (!$returnType instanceof \ReflectionNamedType || $returnType->getName() !== 'void') {
-                throw new \InvalidArgumentException("A local frontend method must declare a void return type: {$methodName}().");
-            }
-
-            $arguments = self::splitArguments($argumentTokens);
-            $parameters = $method->getParameters();
-            if (count($arguments) !== count($parameters)) {
-                throw new \InvalidArgumentException("Frontend method {$methodName}() expects " . count($parameters) . ' argument(s).');
-            }
-            $replacements = [];
-            foreach ($parameters as $parameterIndex => $parameter) {
-                if ($parameter->isVariadic() || $parameter->isPassedByReference()) {
-                    throw new \InvalidArgumentException("Frontend method parameters cannot be variadic or passed by reference: {$methodName}().");
-                }
-                $replacements[$parameter->getName()] = $arguments[$parameterIndex];
-            }
-
-            $body = self::methodBodyTokens($method);
-            $expanded = [];
-            foreach ($body as $token) {
-                $parameter = $token['id'] === T_VARIABLE ? substr($token['text'], 1) : null;
-                if ($parameter !== null && isset($replacements[$parameter])) {
-                    $expanded[] = ['id' => '(', 'text' => '('];
-                    array_push($expanded, ...$replacements[$parameter]);
-                    $expanded[] = ['id' => ')', 'text' => ')'];
-                    continue;
-                }
-                $expanded[] = $token;
-            }
-            $expanded = self::expandLocalMethodCalls($expanded, $scope, [...$stack, $methodName]);
-            array_splice($tokens, $index, $afterArguments - $index + 1, $expanded);
-            $index--;
-        }
-        return $tokens;
-    }
-
     /** @param list<array{id: int|string, text: string}> $tokens @return list<list<array{id: int|string, text: string}>> */
     private static function splitArguments(array $tokens): array
     {
         if ($tokens === []) return [];
         $arguments = []; $argument = []; $depth = 0;
         foreach ($tokens as $token) {
-            if (in_array($token['text'], ['(', '['], true)) $depth++;
-            if (in_array($token['text'], [')', ']'], true)) $depth--;
+            if (in_array($token['text'], ['(', '[', '{'], true)) $depth++;
+            if (in_array($token['text'], [')', ']', '}'], true)) $depth--;
             if ($token['text'] === ',' && $depth === 0) {
                 if ($argument === []) throw new \InvalidArgumentException('Frontend method arguments cannot be empty.');
                 $arguments[] = $argument; $argument = [];
@@ -212,7 +191,7 @@ final class FrontendClosureCompiler
     }
 
     /** @return list<array{id: int|string, text: string}> */
-    private static function methodBodyTokens(\ReflectionMethod $method): array
+    private static function methodBodyTokens(\ReflectionFunctionAbstract $method): array
     {
         $file = $method->getFileName();
         if ($file === false || !is_file($file)) {
@@ -223,327 +202,94 @@ final class FrontendClosureCompiler
         $source = implode('', array_slice($lines, $method->getStartLine() - 1, $method->getEndLine() - $method->getStartLine() + 1));
         $raw = token_get_all("<?php\n" . $source);
         $tokens = [];
+        $line = $method->getStartLine() - 1; $offset = strlen(implode('', array_slice($lines, 0, $method->getStartLine() - 1))) - 6;
+        $origin = self::sourceLocation($method);
         foreach ($raw as $token) {
             $id = is_array($token) ? $token[0] : $token;
             $text = is_array($token) ? $token[1] : $token;
+            $startLine = $line; $startOffset = $offset; $offset += strlen($text);
+            $line += substr_count($text, "\n");
             if (in_array($id, [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) continue;
-            $tokens[] = ['id' => $id, 'text' => $text];
+            $tokens[] = ['id' => $id, 'text' => $text, 'offset' => $startOffset, 'source' => [...$origin, 'line' => $startLine]];
         }
-        $start = null;
+        $tokens = self::packStrings($tokens);
+        if(str_starts_with($method->getName(),'$')) return self::propertyHookBody($tokens,$method);
+        $start = null; $signature = false; $methodName = substr(strrchr('\\' . $method->getName(), '\\'), 1);
+        if ($method instanceof \ReflectionMethod) foreach ($method->getDeclaringClass()->getTraitAliases() as $alias => $original) if ($alias === $methodName) $methodName = explode('::', $original)[1];
         foreach ($tokens as $index => $token) {
-            if ($token['text'] === '{') { $start = $index; break; }
+            if ($token['id'] === T_FUNCTION) {
+                $offset = ($tokens[$index + 1]['text'] ?? '') === '&' ? 2 : 1;
+                $signature = strcasecmp($tokens[$index + $offset]['text'] ?? '', $methodName) === 0;
+            }
+            if ($signature && $token['text'] === '{') { $start = $index; break; }
         }
         if ($start === null) throw new \InvalidArgumentException("Frontend method {$method->getName()}() must have a body.");
         [$body] = self::delimited($tokens, $start, '{', '}');
-        return $body;
+        return self::resolveConstants($body, $method);
     }
 
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return list<ClientInstruction> */
-    private static function instructions(
-        array $tokens,
-        array $states,
-        array &$locals,
-        bool $allowLoopControl = false,
-        bool $staticLoopControl = false,
-    ): array
+    private static function propertyHookBody(array $tokens, \ReflectionFunctionAbstract $method): array
     {
+        [$property,$hook]=explode('::',$method->getName());$start=0;
+        foreach($tokens as $i=>$token)if($token['text']===$property){$start=$i;break;}
+        for($i=$start;$i<count($tokens);$i++)if(strtolower($tokens[$i]['text'])===$hook){
+            $origin=$tokens[$i]['source'];$i++;
+            if(($tokens[$i]['text']??'')==='(')[,$i]=self::delimited($tokens,$i,'(',')');
+            if(($tokens[$i]['text']??'')==='{'){[$body]=self::delimited($tokens,$i,'{','}');return self::resolveConstants($body,$method);}
+            if(($tokens[$i]['text']??'')==='=>'){$body=[];$i++;while(isset($tokens[$i])&&$tokens[$i]['text']!==';')$body[]=$tokens[$i++];$prefix=$hook==='get'?'return ':'$this->'.substr($property,1).' = ';return self::resolveConstants([...self::displayTokens('<?php '.$prefix,1,$origin),...$body,['id'=>';','text'=>';','source'=>$origin]],$method);}
+        }
+        throw new \InvalidArgumentException('Unable to read frontend property hook '.$method->getName());
+    }
+
+    /** Compile each block once; runtime loops always have an iteration budget. */
+    private static function instructions(array $tokens, array $states, array &$locals, int $loopDepth = 0): array
+    {
+        if (in_array(T_EVAL, array_column($tokens, 'id'), true)) $locals['__aml_eval_scope__'] = true;
+        foreach ($tokens as $position => $token) {
+            if ($token['id'] === T_VARIABLE && $token['text'] !== '$this' && in_array($tokens[$position + 1]['text'] ?? '', ['=', '??='], true)) {
+                $name = substr($token['text'], 1);
+                self::assertLocalName($name);
+                $locals[$name] ??= new FrontendLocal($name, ['$local' => 'v' . bin2hex($name)]);
+            }
+        }
         $actions = [];
-        try {
-            for ($index = 0; $index < count($tokens);) {
-            if ($tokens[$index]['id'] === T_IF) {
-                if ($staticLoopControl) {
-                    [$branchActions, $index] = self::staticConditional($tokens, $index, $states, $locals);
-                    array_push($actions, ...$branchActions);
-                    continue;
+        for ($index = 0; $index < count($tokens);) {
+            $origin = $tokens[$index]['source'] ?? null;
+            try {
+                $id = $tokens[$index]['id'];
+                if (self::$evalSource !== null && in_array($id,[T_CLASS,T_ENUM,T_FINAL,T_READONLY,T_ABSTRACT],true)) [$action,$index]=self::evalClassDeclaration($tokens,$index,$states,$locals);
+                elseif ($id === T_FUNCTION && ($tokens[$index + (($tokens[$index + 1]['text'] ?? '') === '&' ? 2 : 1)]['id'] ?? null) === T_STRING) [$action, $index] = self::functionDeclaration($tokens, $index);
+                elseif ($id === T_IF) [$action, $index] = self::conditional($tokens, $index, $states, $locals, $loopDepth);
+                elseif ($id === T_TRY) [$action, $index] = self::tryStatement($tokens, $index, $states, $locals, $loopDepth);
+                elseif (in_array($id, [T_FOR, T_WHILE, T_DO, T_FOREACH], true)) [$action, $index] = self::runtimeLoop($tokens, $index, $states, $locals, $loopDepth);
+                elseif ($id === T_SWITCH) [$action, $index] = self::switchStatement($tokens, $index, $states, $locals, $loopDepth);
+                elseif (in_array($id, [T_BREAK, T_CONTINUE], true)) {
+                    $operation = $id === T_BREAK ? 'break' : 'continue';
+                    $index++;
+                    $levels = 1;
+                    if (($tokens[$index]['id'] ?? null) === T_LNUMBER) $levels = self::integerLiteral($tokens[$index++]['text']);
+                    if (($tokens[$index++]['text'] ?? null) !== ';' || $levels < 1 || $levels > $loopDepth) throw new \InvalidArgumentException("Invalid frontend {$operation} level: {$levels}");
+                    $action = new LoopControlAction($operation, $levels);
+                } else {
+                    $statement = []; $depth = 0;
+                    while ($index < count($tokens)) {
+                        $token = $tokens[$index++];
+                        if ($token['text'] === ';' && $depth === 0) break;
+                        if (in_array($token['text'], ['(', '[', '{'], true)) $depth++;
+                        if (in_array($token['text'], [')', ']', '}'], true)) $depth--;
+                        if ($depth < 0) throw new \InvalidArgumentException('Unexpected block in frontend closure.');
+                        $statement[] = $token;
+                    }
+                    if (($token['text'] ?? null) !== ';') throw new \InvalidArgumentException('Every frontend statement must end with a semicolon.');
+                    $action = $statement === [] ? null : self::statement($statement, $states, $locals);
                 }
-                [$action, $index] = self::conditional($tokens, $index, $states, $locals, $allowLoopControl);
-                $actions[] = $action;
-                continue;
-            }
-            if (in_array($tokens[$index]['id'], [T_BREAK, T_CONTINUE], true)) {
-                $operation = $tokens[$index]['id'] === T_BREAK ? 'break' : 'continue';
-                if (($tokens[$index + 1]['text'] ?? null) !== ';') {
-                    throw new \InvalidArgumentException("Frontend {$operation} does not accept a numeric level.");
+                if ($action !== null) {
+                    self::invalidateMutatedLocals(json_decode($action->json(), true, 512, JSON_THROW_ON_ERROR), $locals);
+                    $actions[] = self::located($action, $origin);
                 }
-                if ($staticLoopControl) {
-                    throw $operation === 'break' ? new FrontendLoopBreak() : new FrontendLoopContinue();
-                }
-                if (!$allowLoopControl) {
-                    throw new \InvalidArgumentException('Frontend break and continue are only valid inside a supported frontend loop.');
-                }
-                $actions[] = $operation === 'break' ? Actions::breakLoop() : Actions::continueLoop();
-                $index += 2;
-                continue;
-            }
-            if ($tokens[$index]['id'] === T_FOR) {
-                [$loopActions, $index] = self::forLoop($tokens, $index, $states, $locals);
-                array_push($actions, ...$loopActions);
-                continue;
-            }
-            if ($tokens[$index]['id'] === T_WHILE) {
-                [$loopActions, $index] = self::whileLoop($tokens, $index, $states, $locals);
-                array_push($actions, ...$loopActions);
-                continue;
-            }
-            if ($tokens[$index]['id'] === T_DO) {
-                [$loopActions, $index] = self::doWhileLoop($tokens, $index, $states, $locals);
-                array_push($actions, ...$loopActions);
-                continue;
-            }
-            if ($tokens[$index]['id'] === T_FOREACH) {
-                [$loopAction, $index] = self::foreachLoop($tokens, $index, $states, $locals);
-                $actions[] = $loopAction;
-                continue;
-            }
-            $statement = [];
-            while ($index < count($tokens) && $tokens[$index]['text'] !== ';') {
-                if (in_array($tokens[$index]['text'], ['{', '}'], true) || $tokens[$index]['id'] === T_ELSE) {
-                    throw new \InvalidArgumentException('Unexpected block in frontend closure.');
-                }
-                $statement[] = $tokens[$index++];
-            }
-            if ($index >= count($tokens)) throw new \InvalidArgumentException('Every frontend statement must end with a semicolon.');
-            $index++;
-            if ($statement !== []) {
-                $action = self::statement($statement, $states, $locals);
-                if ($action !== null) $actions[] = $action;
-            }
-            }
-        } catch (FrontendLoopControl $control) {
-            $control->prepend($actions);
-            throw $control;
+            } catch (\Throwable $error) { throw self::locatedError($error, $origin); }
         }
         return $actions;
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{list<ClientInstruction>, int} */
-    private static function forLoop(array $tokens, int $index, array $states, array &$locals): array
-    {
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '(') throw new \InvalidArgumentException('A frontend for loop must use parentheses.');
-        [$header, $index] = self::delimited($tokens, $index, '(', ')');
-        $parts = self::splitTopLevel($header, ';');
-        if (count($parts) !== 3 || $parts[0] === [] || $parts[1] === [] || $parts[2] === []) {
-            throw new \InvalidArgumentException('A frontend for loop requires initialization, condition and update expressions.');
-        }
-        if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend for loop must use braces.');
-        [$body, $index] = self::delimited($tokens, $index, '{', '}');
-
-        self::localLoopStatement($parts[0], $states, $locals);
-        $actions = [];
-        $iterations = 0;
-        while (self::staticLoopCondition($parts[1], $states, $locals)) {
-            if (++$iterations > self::MAX_LOOP_ITERATIONS) self::loopLimitExceeded('for');
-            try {
-                array_push($actions, ...self::instructions($body, $states, $locals, false, true));
-            } catch (FrontendLoopBreak $control) {
-                array_push($actions, ...$control->actions);
-                break;
-            } catch (FrontendLoopContinue $control) {
-                array_push($actions, ...$control->actions);
-                self::localLoopStatement($parts[2], $states, $locals);
-                continue;
-            }
-            self::localLoopStatement($parts[2], $states, $locals);
-        }
-        return [$actions, $index];
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{list<ClientInstruction>, int} */
-    private static function whileLoop(array $tokens, int $index, array $states, array &$locals): array
-    {
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '(') throw new \InvalidArgumentException('A frontend while loop must use parentheses.');
-        [$condition, $index] = self::delimited($tokens, $index, '(', ')');
-        if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend while loop must use braces.');
-        [$body, $index] = self::delimited($tokens, $index, '{', '}');
-
-        $actions = [];
-        $iterations = 0;
-        while (self::staticLoopCondition($condition, $states, $locals)) {
-            if (++$iterations > self::MAX_LOOP_ITERATIONS) self::loopLimitExceeded('while');
-            try {
-                array_push($actions, ...self::instructions($body, $states, $locals, false, true));
-            } catch (FrontendLoopBreak $control) {
-                array_push($actions, ...$control->actions);
-                break;
-            } catch (FrontendLoopContinue $control) {
-                array_push($actions, ...$control->actions);
-                continue;
-            }
-        }
-        return [$actions, $index];
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{list<ClientInstruction>, int} */
-    private static function doWhileLoop(array $tokens, int $index, array $states, array &$locals): array
-    {
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend do loop must use braces.');
-        [$body, $index] = self::delimited($tokens, $index, '{', '}');
-        if (($tokens[$index]['id'] ?? null) !== T_WHILE || ($tokens[$index + 1]['text'] ?? null) !== '(') {
-            throw new \InvalidArgumentException('A frontend do loop must end with while (...).');
-        }
-        [$condition, $index] = self::delimited($tokens, $index + 1, '(', ')');
-        if (($tokens[$index]['text'] ?? null) !== ';') throw new \InvalidArgumentException('A frontend do...while loop must end with a semicolon.');
-        $index++;
-
-        $actions = [];
-        $iterations = 0;
-        do {
-            if (++$iterations > self::MAX_LOOP_ITERATIONS) self::loopLimitExceeded('do...while');
-            try {
-                array_push($actions, ...self::instructions($body, $states, $locals, false, true));
-            } catch (FrontendLoopBreak $control) {
-                array_push($actions, ...$control->actions);
-                break;
-            } catch (FrontendLoopContinue $control) {
-                array_push($actions, ...$control->actions);
-                // Continue evaluates the trailing while condition, as in PHP.
-            }
-        } while (self::staticLoopCondition($condition, $states, $locals));
-        return [$actions, $index];
-    }
-
-    /**
-     * Evaluate an if / elseif / else whose condition contains local loop
-     * values only. This lets compile-time loops preserve native PHP break and
-     * continue semantics without making their iteration count state-driven.
-     *
-     * @param list<array{id: int|string, text: string}> $tokens
-     * @param array<string, StateRef> $states
-     * @return array{list<ClientInstruction>, int}
-     */
-    private static function staticConditional(array $tokens, int $index, array $states, array &$locals): array
-    {
-        if (!in_array($tokens[$index]['id'] ?? null, [T_IF, T_ELSEIF], true)) {
-            throw new \InvalidArgumentException('A frontend loop conditional must begin with if or elseif.');
-        }
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '(') {
-            throw new \InvalidArgumentException('A frontend loop if condition must use parentheses.');
-        }
-        [$condition, $index] = self::delimited($tokens, $index, '(', ')');
-        if (($tokens[$index]['text'] ?? null) !== '{') {
-            throw new \InvalidArgumentException('A frontend loop if branch must use braces.');
-        }
-        [$thenTokens, $index] = self::delimited($tokens, $index, '{', '}');
-
-        $matches = self::staticLoopCondition($condition, $states, $locals);
-        $selected = $matches ? $thenTokens : null;
-        if (($tokens[$index]['id'] ?? null) === T_ELSEIF) {
-            if ($matches) {
-                [, $index] = self::skipStaticConditional($tokens, $index);
-            } else {
-                return self::staticConditional($tokens, $index, $states, $locals);
-            }
-        } elseif (($tokens[$index]['id'] ?? null) === T_ELSE) {
-            $index++;
-            if (($tokens[$index]['id'] ?? null) === T_IF) {
-                if ($matches) {
-                    [, $index] = self::skipStaticConditional($tokens, $index);
-                } else {
-                    return self::staticConditional($tokens, $index, $states, $locals);
-                }
-            } else {
-                if (($tokens[$index]['text'] ?? null) !== '{') {
-                    throw new \InvalidArgumentException('A frontend loop else branch must use braces.');
-                }
-                [$elseTokens, $index] = self::delimited($tokens, $index, '{', '}');
-                if (!$matches) $selected = $elseTokens;
-            }
-        }
-
-        if ($selected === null || $selected === []) return [[], $index];
-        return [self::instructions($selected, $states, $locals, false, true), $index];
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @return array{null, int} */
-    private static function skipStaticConditional(array $tokens, int $index): array
-    {
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '(') {
-            throw new \InvalidArgumentException('A frontend loop if condition must use parentheses.');
-        }
-        [, $index] = self::delimited($tokens, $index, '(', ')');
-        if (($tokens[$index]['text'] ?? null) !== '{') {
-            throw new \InvalidArgumentException('A frontend loop if branch must use braces.');
-        }
-        [, $index] = self::delimited($tokens, $index, '{', '}');
-        while (in_array($tokens[$index]['id'] ?? null, [T_ELSEIF, T_ELSE], true)) {
-            if (($tokens[$index]['id'] ?? null) === T_ELSEIF) {
-                [, $index] = self::skipStaticConditional($tokens, $index);
-                return [null, $index];
-            }
-            $index++;
-            if (($tokens[$index]['id'] ?? null) === T_IF) {
-                [, $index] = self::skipStaticConditional($tokens, $index);
-                return [null, $index];
-            }
-            if (($tokens[$index]['text'] ?? null) !== '{') {
-                throw new \InvalidArgumentException('A frontend loop else branch must use braces.');
-            }
-            [, $index] = self::delimited($tokens, $index, '{', '}');
-        }
-        return [null, $index];
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{ClientInstruction, int} */
-    private static function foreachLoop(array $tokens, int $index, array $states, array &$locals): array
-    {
-        $index++;
-        if (($tokens[$index]['text'] ?? null) !== '(') throw new \InvalidArgumentException('A frontend foreach loop must use parentheses.');
-        [$header, $index] = self::delimited($tokens, $index, '(', ')');
-        $as = null;
-        $depth = 0;
-        foreach ($header as $headerIndex => $token) {
-            if ($token['text'] === '[') $depth++;
-            if ($token['text'] === ']') $depth--;
-            if ($depth === 0 && $token['id'] === T_AS) { $as = $headerIndex; break; }
-        }
-        if ($as === null || $as === 0) {
-            throw new \InvalidArgumentException('A frontend foreach requires a reactive collection before as.');
-        }
-        $sourceTokens = array_slice($header, 0, $as);
-        $binding = array_slice($header, $as + 1);
-        $rootState = count($sourceTokens) === 3
-            && ($sourceTokens[0]['id'] ?? null) === T_VARIABLE && $sourceTokens[0]['text'] === '$this'
-            && ($sourceTokens[1]['id'] ?? null) === T_OBJECT_OPERATOR
-            && ($sourceTokens[2]['id'] ?? null) === T_STRING;
-        if ($rootState) {
-            $source = $sourceTokens[2]['text'];
-            if (!isset($states[$source]) || !is_array($states[$source]->initial)) {
-                throw new \OutOfBoundsException("Unknown or non-array AML View #[State] collection: {$source}");
-            }
-        } else {
-            $source = self::value($sourceTokens, $states, $locals);
-            if (!is_array($source) || !isset($source['$loop'])) {
-                throw new \InvalidArgumentException('A nested frontend foreach source must come from its parent loop, such as $category[\'products\'].');
-            }
-        }
-
-        $key = null;
-        if (count($binding) === 1 && ($binding[0]['id'] ?? null) === T_VARIABLE) {
-            $value = substr($binding[0]['text'], 1);
-        } elseif (count($binding) === 3
-            && ($binding[0]['id'] ?? null) === T_VARIABLE
-            && ($binding[1]['id'] ?? null) === T_DOUBLE_ARROW
-            && ($binding[2]['id'] ?? null) === T_VARIABLE) {
-            $key = substr($binding[0]['text'], 1);
-            $value = substr($binding[2]['text'], 1);
-        } else {
-            throw new \InvalidArgumentException('A frontend foreach must use $value or $key => $value variables without references.');
-        }
-        if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend foreach loop must use braces.');
-        [$body, $index] = self::delimited($tokens, $index, '{', '}');
-
-        $bodyLocals = $locals;
-        $bodyLocals[$value] = ['$loop' => $value];
-        if ($key !== null) $bodyLocals[$key] = ['$loop' => $key];
-        $actions = self::instructions($body, $states, $bodyLocals, true);
-        if ($actions === []) throw new \InvalidArgumentException('A frontend foreach body cannot be empty.');
-        $action = count($actions) === 1 ? $actions[0] : Actions::sequence(...$actions);
-        return [Actions::each($source, $value, $key, $action), $index];
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @return list<list<array{id: int|string, text: string}>> */
@@ -551,8 +297,8 @@ final class FrontendClosureCompiler
     {
         $parts = []; $part = []; $depth = 0;
         foreach ($tokens as $token) {
-            if (in_array($token['text'], ['(', '['], true)) $depth++;
-            if (in_array($token['text'], [')', ']'], true)) $depth--;
+            if (in_array($token['text'], ['(', '[', '{'], true)) $depth++;
+            if (in_array($token['text'], [')', ']', '}'], true)) $depth--;
             if ($token['text'] === $separator && $depth === 0) {
                 $parts[] = $part; $part = [];
                 continue;
@@ -563,42 +309,8 @@ final class FrontendClosureCompiler
         return $parts;
     }
 
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
-    private static function localLoopStatement(array $tokens, array $states, array &$locals): void
-    {
-        $action = self::statement($tokens, $states, $locals);
-        if ($action !== null) {
-            throw new \InvalidArgumentException('A frontend loop control expression may only update a local variable.');
-        }
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
-    private static function staticLoopCondition(array $tokens, array $states, array $locals): bool
-    {
-        [$left, $operator, $right] = self::condition($tokens, $states, $locals);
-        if ($left instanceof StateRef || $left instanceof StateExpression || $left instanceof StateConditional
-            || $right instanceof StateRef || $right instanceof StateExpression || $right instanceof StateConditional) {
-            throw new \InvalidArgumentException('A frontend loop condition must use local values so its iteration count is bounded during compilation.');
-        }
-        return match ($operator) {
-            'eq' => $left === $right,
-            'neq' => $left !== $right,
-            'gt' => $left > $right,
-            'gte' => $left >= $right,
-            'lt' => $left < $right,
-            'lte' => $left <= $right,
-            'truthy' => (bool) $left,
-            default => throw new \InvalidArgumentException("Unsupported frontend loop comparison: {$operator}"),
-        };
-    }
-
-    private static function loopLimitExceeded(string $type): never
-    {
-        throw new \InvalidArgumentException("Frontend {$type} loop exceeds the safe limit of " . self::MAX_LOOP_ITERATIONS . ' iterations.');
-    }
-
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{ClientInstruction, int} */
-    private static function conditional(array $tokens, int $index, array $states, array $locals, bool $allowLoopControl = false): array
+    private static function conditional(array $tokens, int $index, array $states, array &$locals, int $allowLoopControl = 0): array
     {
         if (!in_array($tokens[$index]['id'] ?? null, [T_IF, T_ELSEIF], true)) {
             throw new \InvalidArgumentException('A frontend conditional must begin with if or elseif.');
@@ -606,11 +318,11 @@ final class FrontendClosureCompiler
         $index++;
         if (($tokens[$index]['text'] ?? null) !== '(') throw new \InvalidArgumentException('A frontend if condition must use parentheses.');
         [$condition, $index] = self::delimited($tokens, $index, '(', ')');
-        if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend if branch must use braces.');
-        [$thenTokens, $index] = self::delimited($tokens, $index, '{', '}');
+        [$thenTokens, $index] = self::statementBody($tokens, $index);
+        $conditionLocals = $locals;
         $thenLocals = $locals;
         $then = self::instructions($thenTokens, $states, $thenLocals, $allowLoopControl);
-        if ($then === []) throw new \InvalidArgumentException('A frontend if branch cannot be empty.');
+
 
         $otherwise = null;
         if (($tokens[$index]['id'] ?? null) === T_ELSEIF) {
@@ -620,17 +332,23 @@ final class FrontendClosureCompiler
             if (($tokens[$index]['id'] ?? null) === T_IF) {
                 [$otherwise, $index] = self::conditional($tokens, $index, $states, $locals, $allowLoopControl);
             } else {
-                if (($tokens[$index]['text'] ?? null) !== '{') throw new \InvalidArgumentException('A frontend else branch must use braces.');
-                [$elseTokens, $index] = self::delimited($tokens, $index, '{', '}');
+                [$elseTokens, $index] = self::statementBody($tokens, $index);
                 $elseLocals = $locals;
                 $else = self::instructions($elseTokens, $states, $elseLocals, $allowLoopControl);
-                if ($else === []) throw new \InvalidArgumentException('A frontend else branch cannot be empty.');
-                $otherwise = count($else) === 1 ? $else[0] : Actions::sequence(...$else);
+
+                $otherwise = self::blockAction($else);
             }
         }
 
-        $thenAction = count($then) === 1 ? $then[0] : Actions::sequence(...$then);
-        return [self::conditionalAction($condition, $states, $locals, $thenAction, $otherwise), $index];
+        foreach ([$thenLocals, $elseLocals ?? $conditionLocals, $locals] as $branchLocals) {
+            foreach ($branchLocals as $name => $local) {
+                if ($local instanceof FrontendLocal && ($conditionLocals[$name] ?? null) !== $local) {
+                    $locals[$name] = new FrontendLocal($name, ['$local' => $local->id()]);
+                }
+            }
+        }
+        $thenAction = self::blockAction($then);
+        return [self::conditionalAction($condition, $states, $conditionLocals, $thenAction, $otherwise), $index];
     }
 
     /**
@@ -649,71 +367,22 @@ final class FrontendClosureCompiler
         ClientInstruction $then,
         ?ClientInstruction $otherwise,
     ): ClientInstruction {
-        $tokens = self::unwrapParentheses($tokens);
-
-        $or = self::splitBooleanCondition($tokens, T_BOOLEAN_OR);
-        if ($or !== null) {
-            [$left, $right] = $or;
-            $rightAction = self::conditionalAction($right, $states, $locals, $then, $otherwise);
-            return self::conditionalAction($left, $states, $locals, $then, $rightAction);
-        }
-
-        $and = self::splitBooleanCondition($tokens, T_BOOLEAN_AND);
-        if ($and !== null) {
-            [$left, $right] = $and;
-            $rightAction = self::conditionalAction($right, $states, $locals, $then, $otherwise);
-            return self::conditionalAction($left, $states, $locals, $rightAction, $otherwise);
-        }
-
-        [$left, $operator, $value] = self::condition($tokens, $states, $locals);
-        if ($left instanceof StateRef) {
-            return Actions::when($left->name, $operator, $value, $then, $otherwise);
-        }
-        if ($left instanceof StateExpression) {
-            return Actions::whenValue($left, $operator, $value, $then, $otherwise);
-        }
-        if (is_array($left) && isset($left['$loop'])) {
-            return Actions::whenValue($left, $operator, $value, $then, $otherwise);
-        }
-        throw new \InvalidArgumentException('A frontend condition must depend on at least one #[State] property.');
+        $value = self::value($tokens, $states, $locals);
+        return self::conditionValueAction($value, $then, $otherwise);
     }
 
-    /** @param list<array{id: int|string, text: string}> $tokens @return null|array{array, array} */
-    private static function splitBooleanCondition(array $tokens, int $operator): ?array
+    private static function conditionValueAction(mixed $value, ClientInstruction $then, ?ClientInstruction $otherwise): ClientInstruction
     {
-        $depth = 0;
-        foreach ($tokens as $index => $token) {
-            if ($token['text'] === '(') { $depth++; continue; }
-            if ($token['text'] === ')') { $depth--; continue; }
-            if ($depth !== 0 || $token['id'] !== $operator) continue;
-            $left = array_slice($tokens, 0, $index);
-            $right = array_slice($tokens, $index + 1);
-            if ($left === [] || $right === []) {
-                throw new \InvalidArgumentException('A frontend boolean operator requires an expression on both sides.');
-            }
-            return [$left, $right];
+        if ($value instanceof StateExpression && in_array($value->operation, ['and', 'or'], true)) {
+            $right = self::conditionValueAction($value->right, $then, $otherwise);
+            return $value->operation === 'and'
+                ? self::conditionValueAction($value->left, $right, $otherwise)
+                : self::conditionValueAction($value->left, $then, $right);
         }
-        return null;
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @return list<array{id: int|string, text: string}> */
-    private static function unwrapParentheses(array $tokens): array
-    {
-        while (($tokens[0]['text'] ?? null) === '(' && ($tokens[array_key_last($tokens)]['text'] ?? null) === ')') {
-            $depth = 0;
-            $wrapsAll = true;
-            foreach ($tokens as $index => $token) {
-                if ($token['text'] === '(') $depth++;
-                if ($token['text'] === ')') $depth--;
-                if ($depth === 0 && $index !== array_key_last($tokens)) {
-                    $wrapsAll = false;
-                    break;
-                }
-            }
-            if (!$wrapsAll) break;
-            $tokens = array_slice($tokens, 1, -1);
-        }
-        return $tokens;
+        [$left, $operator, $right] = self::conditionValue($value);
+        return $left instanceof StateRef
+            ? Actions::when($left->name, $operator, $right, $then, $otherwise)
+            : Actions::whenValue(is_string($left) ? new StateExpression('toString', $left, null) : $left, $operator, $right, $then, $otherwise);
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @return array{list<array{id: int|string, text: string}>, int} */
@@ -733,117 +402,102 @@ final class FrontendClosureCompiler
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @return array{mixed, string, mixed} */
     private static function condition(array $tokens, array $states, array $locals): array
     {
-        $depth = 0;
-        foreach ($tokens as $index => $token) {
-            if ($token['text'] === '(') { $depth++; continue; }
-            if ($token['text'] === ')') { $depth--; continue; }
-            if ($depth !== 0) continue;
-            $operator = match ($token['id']) {
-                T_IS_EQUAL, T_IS_IDENTICAL => 'eq',
-                T_IS_NOT_EQUAL, T_IS_NOT_IDENTICAL => 'neq',
-                T_IS_GREATER_OR_EQUAL => 'gte',
-                T_IS_SMALLER_OR_EQUAL => 'lte',
-                default => match ($token['text']) { '>' => 'gt', '<' => 'lt', default => null },
-            };
-            if ($operator !== null) {
-                return [
-                    self::value(array_slice($tokens, 0, $index), $states, $locals),
-                    $operator,
-                    self::value(array_slice($tokens, $index + 1), $states, $locals),
-                ];
-            }
-        }
-        return [self::value($tokens, $states, $locals), 'truthy', true];
+        return self::conditionValue(self::value($tokens, $states, $locals));
+    }
+
+    private static function conditionValue(mixed $value): array
+    {
+        $operators = ['identical' => 'eq', 'notIdentical' => 'neq', 'equal' => 'looseEq', 'notEqual' => 'looseNeq', 'greater' => 'gt', 'greaterEqual' => 'gte', 'less' => 'lt', 'lessEqual' => 'lte'];
+        if ($value instanceof StateExpression && isset($operators[$value->operation])) return [$value->left, $operators[$value->operation], $value->right];
+        return [$value, 'truthy', true];
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
     private static function statement(array $tokens, array $states, array &$locals): ?ClientInstruction
     {
+        if (($tokens[0]['id'] ?? null) === T_STATIC && ($tokens[1]['id'] ?? null) === T_VARIABLE) return self::staticLocalStatement($tokens, $states, $locals);
+        if (($tokens[0]['text'] ?? null) === '[' || ($tokens[0]['id'] ?? null) === T_LIST) return self::destructureStatement($tokens, $states, $locals);
+        if (in_array('&', array_column($tokens, 'text'), true) && in_array('=', array_column($tokens, 'text'), true)) return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (self::$objectScope !== null && ($tokens[0]['text'] ?? null) === '$this' && ($tokens[1]['text'] ?? null) === '[') return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (($tokens[0]['text'] ?? null) === '$' || ($tokens[1]['id'] ?? null) === T_DOUBLE_COLON && (($tokens[2]['id'] ?? null) === T_VARIABLE || ($tokens[2]['text'] ?? null) === '$')) return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (in_array($tokens[0]['id'] ?? null, [T_THROW, T_YIELD, T_YIELD_FROM], true)) return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (in_array($tokens[1]['text'] ?? null, ['->', '?->'], true) && ($tokens[0]['text'] !== '$this' || self::$objectScope !== null)) return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (($tokens[0]['id'] ?? null) === T_RETURN) return new FlowAction('return', ['value' => count($tokens) > 1 ? self::value(array_slice($tokens, 1), $states, $locals) : null, 'hasValue' => count($tokens) > 1]);
+        if (($tokens[0]['id'] ?? null) === T_ECHO) return ConsoleAction::output(...array_map(static fn (array $part): mixed => self::value($part, $states, $locals), self::splitTopLevel(array_slice($tokens, 1), ',')));
         if (($tokens[0]['id'] ?? null) === T_UNSET) {
-            if (($tokens[1]['text'] ?? null) !== '(' || ($tokens[array_key_last($tokens)]['text'] ?? null) !== ')') {
-                throw new \InvalidArgumentException('Frontend unset() must use parentheses.');
-            }
-            [$targetTokens, $after] = self::delimited($tokens, 1, '(', ')');
-            if ($after !== count($tokens) || self::splitArguments($targetTokens) !== [$targetTokens]) {
-                throw new \InvalidArgumentException('Frontend unset() accepts exactly one nested #[State] target.');
-            }
-            [$name, $path, $operatorIndex, $append] = self::stateTarget($targetTokens, $states, false);
-            if ($append || $operatorIndex !== count($targetTokens) || $path === $name) {
-                throw new \InvalidArgumentException('Frontend unset() requires a nested #[State] array element.');
-            }
-            return ClientAction::removePath($path);
+            [$arguments, $after] = self::delimited($tokens, 1, '(', ')');
+            if ($after !== count($tokens)) throw new \InvalidArgumentException('Unexpected tokens after unset().');
+            return self::blockAction(array_map(static function (array $part) use ($states, $locals): ClientInstruction {
+                $target = self::value($part, $states, $locals, true);
+                self::assertAssignable($target);
+                return new ExpressionAction(new StateExpression('unsetOffset', $target, null));
+            }, self::splitTopLevel($arguments, ',')));
         }
+        if (($tokens[0]['id'] ?? null) === T_STRING && in_array(strtolower($tokens[0]['text']), ['sort', 'rsort', 'asort', 'arsort', 'ksort', 'krsort', 'usort', 'array_pop', 'array_shift', 'array_push', 'array_unshift'], true)) {
+            return new ExpressionAction(self::value($tokens, $states, $locals));
+        }
+        // Array writes include dynamic keys and use value semantics for local snapshots.
+        $assignmentPosition = null;
+        foreach ($tokens as $position => $token) if (in_array($token['text'], ['=', '+=', '-=', '*=', '/=', '%=', '**=', '.=', '??=', '++', '--'], true)) { $assignmentPosition = $position; break; }
+        if ($assignmentPosition !== null && in_array('[', array_column(array_slice($tokens, 0, $assignmentPosition), 'text'), true)) return new ExpressionAction(self::value($tokens, $states, $locals));
+        if (in_array($tokens[0]['id'] ?? null, [T_INC, T_DEC], true)) return new ExpressionAction(self::value($tokens, $states, $locals));
 
+        if (in_array($tokens[0]['id'] ?? null, [T_STRING, T_NAME_FULLY_QUALIFIED], true)
+            && strtolower(ltrim($tokens[0]['text'], '\\')) === 'var_dump') {
+            [$arguments, $after] = self::delimited($tokens, 1, '(', ')');
+            if ($after !== count($tokens)) throw new \InvalidArgumentException('var_dump() must be a complete statement.');
+            return ConsoleAction::dump(...array_map(
+                static fn (array $argument): mixed => self::value($argument, $states, $locals),
+                self::splitArguments($arguments),
+            ));
+        }
         $console = self::consoleCall($tokens, $states, $locals);
         if ($console !== null) return $console;
-
-        if (($tokens[0]['id'] ?? null) === T_STRING && in_array(strtolower($tokens[0]['text']), ['sort', 'usort'], true)) {
-            $function = strtolower($tokens[0]['text']);
-            if (($tokens[1]['text'] ?? null) !== '(' || ($tokens[array_key_last($tokens)]['text'] ?? null) !== ')') {
-                throw new \InvalidArgumentException("Frontend {$function}() must use parentheses.");
-            }
-            [$argumentTokens, $after] = self::delimited($tokens, 1, '(', ')');
-            if ($after !== count($tokens)) {
-                throw new \InvalidArgumentException("Unexpected token after frontend {$function}().");
-            }
-            $arguments = self::splitArguments($argumentTokens);
-            $expected = $function === 'sort' ? 1 : 2;
-            if (count($arguments) !== $expected) {
-                throw new \InvalidArgumentException("Frontend {$function}() expects {$expected} argument(s).");
-            }
-            $target = $arguments[0];
-            if (count($target) !== 3 || ($target[0]['id'] ?? null) !== T_VARIABLE || $target[0]['text'] !== '$this'
-                || ($target[1]['id'] ?? null) !== T_OBJECT_OPERATOR || ($target[2]['id'] ?? null) !== T_STRING) {
-                throw new \InvalidArgumentException("Frontend {$function}() must target a #[State] collection through \$this.");
-            }
-            $name = $target[2]['text'];
-            if (!isset($states[$name]) || !is_array($states[$name]->initial)) {
-                throw new \OutOfBoundsException("Unknown or non-array AML View #[State] collection: {$name}");
-            }
-            $expression = $function === 'sort'
-                ? new StateExpression('sort', $states[$name], null)
-                : new StateExpression('sortBy', $states[$name], self::arrowCallback($arguments[1], 2, $states, $locals, false));
-            return ClientAction::set($name, $expression);
+        if ((($tokens[1]['text'] ?? null) === '(')
+            || (($tokens[3]['text'] ?? null) === '(' && in_array($tokens[1]['id'] ?? null, [T_OBJECT_OPERATOR, T_DOUBLE_COLON], true))) {
+            return new ExpressionAction(self::value($tokens, $states, $locals));
         }
 
-        if (($tokens[0]['id'] ?? null) === T_STRING && in_array(strtolower($tokens[0]['text']), ['array_pop', 'array_shift'], true)) {
-            if (count($tokens) !== 6 || $tokens[1]['text'] !== '(' || $tokens[2]['id'] !== T_VARIABLE
-                || $tokens[2]['text'] !== '$this' || $tokens[3]['id'] !== T_OBJECT_OPERATOR
-                || $tokens[4]['id'] !== T_STRING || $tokens[5]['text'] !== ')') {
-                throw new \InvalidArgumentException('array_pop() and array_shift() accept exactly one #[State] collection in frontend handlers.');
-            }
-            $name = $tokens[4]['text'];
-            if (!isset($states[$name]) || !is_array($states[$name]->initial)) {
-                throw new \OutOfBoundsException("Unknown or non-array AML View #[State] collection: {$name}");
-            }
-            return ClientAction::removeAt($name, strtolower($tokens[0]['text']) === 'array_pop' ? -1 : 0);
+        if (($tokens[0]['text'] ?? '') === '(' || in_array(T_COALESCE_EQUAL, array_column($tokens, 'id'), true)) {
+            return new ExpressionAction(self::value($tokens, $states, $locals));
+        }
+        if (array_intersect(array_column($tokens, 'id'), [T_LOGICAL_AND, T_LOGICAL_OR, T_LOGICAL_XOR, T_SL_EQUAL, T_SR_EQUAL, T_AND_EQUAL, T_OR_EQUAL, T_XOR_EQUAL])) {
+            if (($tokens[0]['id'] ?? null) === T_VARIABLE && $tokens[0]['text'] !== '$this' && ($tokens[1]['text'] ?? null) === '=') { $name = substr($tokens[0]['text'], 1); $locals[$name] ??= new FrontendLocal($name, null); }
+            return new ExpressionAction(self::value($tokens, $states, $locals));
         }
         if (count($tokens) >= 2 && $tokens[0]['id'] === T_VARIABLE && $tokens[0]['text'] !== '$this') {
             $name = substr($tokens[0]['text'], 1);
-            if (count($tokens) === 2 && in_array($tokens[1]['id'], [T_INC, T_DEC], true)) {
-                if (!array_key_exists($name, $locals) || !is_numeric($locals[$name])) {
-                    throw new \InvalidArgumentException("Frontend local increment requires an existing numeric variable: \${$name}");
-                }
-                $locals[$name] += $tokens[1]['id'] === T_INC ? 1 : -1;
-                return null;
+            self::assertLocalName($name);
+            $operator = $tokens[1];
+            $previous = $locals[$name] ?? null;
+            if (!array_key_exists($name,$locals) && isset($locals['__aml_eval_scope__'])) $locals[$name] = new FrontendLocal($name, ['$local'=>'v'.bin2hex($name)]);
+            $previous = $locals[$name] ?? null;
+            if ($operator['text'] !== '=' && !array_key_exists($name, $locals)) {
+                throw new \OutOfBoundsException("Undefined frontend local variable: \${$name}");
             }
-            if ($tokens[1]['text'] === '=') {
-                $locals[$name] = self::value(array_slice($tokens, 2), $states, $locals);
-                return null;
+            $current = $previous instanceof FrontendLocal ? $previous->reference() : $previous;
+            $known = $previous instanceof FrontendLocal ? $previous->known : $previous;
+            if (count($tokens) === 2 && in_array($operator['id'], [T_INC, T_DEC], true)) {
+                $operation = $operator['id'] === T_INC ? '+' : '-';
+                $value = new StateExpression($operation === '+' ? 'incrementValue' : 'decrementValue', $current, null);
+                $known = self::arithmetic($operation, $known, 1);
+            } else {
+                $right = self::value(array_slice($tokens, 2), $states, $locals);
+                try { $knownRight = self::value(array_slice($tokens, 2), $states, self::knownLocals($locals)); }
+                catch (\InvalidArgumentException|\OutOfBoundsException) { $knownRight = $right; }
+                $operation = match ($operator['id']) {
+                    T_PLUS_EQUAL => '+', T_MINUS_EQUAL => '-', T_MUL_EQUAL => '*',
+                    T_DIV_EQUAL => '/', T_MOD_EQUAL => '%', T_POW_EQUAL => '**', T_CONCAT_EQUAL => '.',
+                    default => null,
+                };
+                if ($operator['text'] === '=') { $value = $right; $known = $knownRight; }
+                elseif ($operation !== null) {
+                    $value = self::arithmetic($operation, $current, $right);
+                    $known = self::arithmetic($operation, $known, $knownRight);
+                } else throw new \InvalidArgumentException('Unsupported frontend local assignment.');
             }
-            if (!array_key_exists($name, $locals)) {
-                throw new \InvalidArgumentException("Frontend local update requires an existing variable: \${$name}");
-            }
-            $right = self::value(array_slice($tokens, 2), $states, $locals);
-            $locals[$name] = match ($tokens[1]['id']) {
-                T_PLUS_EQUAL => self::arithmetic('+', $locals[$name], $right),
-                T_MINUS_EQUAL => self::arithmetic('-', $locals[$name], $right),
-                T_MUL_EQUAL => self::arithmetic('*', $locals[$name], $right),
-                T_DIV_EQUAL => self::arithmetic('/', $locals[$name], $right),
-                T_MOD_EQUAL => self::arithmetic('%', $locals[$name], $right),
-                default => throw new \InvalidArgumentException('A frontend local variable must use a supported assignment or increment.'),
-            };
-            return null;
+            $locals[$name] = new FrontendLocal($name, $known);
+            return new LocalAction($locals[$name]->id(), $value);
         }
         if (count($tokens) < 4 || $tokens[0]['id'] !== T_VARIABLE || $tokens[0]['text'] !== '$this'
             || $tokens[1]['id'] !== T_OBJECT_OPERATOR || $tokens[2]['id'] !== T_STRING) {
@@ -871,6 +525,7 @@ final class FrontendClosureCompiler
         if ($operator === T_MUL_EQUAL) return ClientAction::set($path, $reference->times($value));
         if ($operator === T_DIV_EQUAL) return ClientAction::set($path, $reference->dividedBy($value));
         if ($operator === T_MOD_EQUAL) return ClientAction::set($path, $reference->modulo($value));
+        if ($operator === T_POW_EQUAL) return ClientAction::set($path, new StateExpression('power', $reference, $value));
         if ($operator === T_CONCAT_EQUAL) return ClientAction::set($path, $reference->concat($value));
         throw new \InvalidArgumentException("Unsupported frontend state operator for {$name}.");
     }
@@ -943,8 +598,8 @@ final class FrontendClosureCompiler
         $argument = [];
         $depth = 0;
         foreach (array_slice($tokens, 4, -1) as $token) {
-            if (in_array($token['text'], ['(', '['], true)) $depth++;
-            if (in_array($token['text'], [')', ']'], true)) $depth--;
+            if (in_array($token['text'], ['(', '[', '{'], true)) $depth++;
+            if (in_array($token['text'], [')', ']', '}'], true)) $depth--;
             if ($token['text'] === ',' && $depth === 0) {
                 if ($argument === []) throw new \InvalidArgumentException('Frontend Console arguments cannot be empty.');
                 $arguments[] = self::value($argument, $states, $locals);
@@ -963,80 +618,174 @@ final class FrontendClosureCompiler
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
-    private static function value(array $tokens, array $states, array $locals = []): mixed
+    private static function value(array $tokens, array $states, array $locals = [], bool $quiet = false): mixed
     {
         if ($tokens === []) throw new \InvalidArgumentException('A frontend expression cannot be empty.');
-        $ternary = self::ternaryParts($tokens);
-        if ($ternary !== null) {
-            [$conditionTokens, $thenTokens, $otherwiseTokens] = $ternary;
-            [$left, $operator, $right] = self::condition($conditionTokens, $states, $locals);
-            if (!$left instanceof StateRef && !$left instanceof StateExpression) {
-                throw new \InvalidArgumentException('A frontend ternary condition must depend on at least one #[State] property.');
+        self::$valueDepth++;
+        try {
+            $index = 0;
+            $value = self::expression($tokens, $index, $states, $locals, 0);
+            if ($index !== count($tokens)) {
+                throw new \InvalidArgumentException("Unsupported token in frontend expression: {$tokens[$index]['text']}");
             }
-            return new StateConditional(
-                $left,
-                $operator,
-                $right,
-                self::value($thenTokens, $states, $locals),
-                self::value($otherwiseTokens, $states, $locals),
-            );
+        } finally {
+            self::$valueDepth--;
         }
-        $index = 0;
-        $value = self::expression($tokens, $index, $states, $locals, 0);
-        if ($index !== count($tokens)) {
-            throw new \InvalidArgumentException("Unsupported token in frontend expression: {$tokens[$index]['text']}");
-        }
+        // Validate the whole expression so a function argument can belong to a lazy branch.
+        if (self::$valueDepth === 0) self::validateLocals($value, $locals, $quiet);
         return $value;
-    }
-
-    /** @param list<array{id: int|string, text: string}> $tokens @return null|array{array, array, array} */
-    private static function ternaryParts(array $tokens): ?array
-    {
-        $depth = 0;
-        $question = null;
-        foreach ($tokens as $index => $token) {
-            if ($token['text'] === '(') { $depth++; continue; }
-            if ($token['text'] === ')') { $depth--; continue; }
-            if ($depth === 0 && $token['text'] === '?') { $question = $index; break; }
-        }
-        if ($question === null) return null;
-
-        $depth = 0;
-        $nested = 0;
-        for ($index = $question + 1; $index < count($tokens); $index++) {
-            $text = $tokens[$index]['text'];
-            if ($text === '(') { $depth++; continue; }
-            if ($text === ')') { $depth--; continue; }
-            if ($depth !== 0) continue;
-            if ($text === '?') { $nested++; continue; }
-            if ($text === ':' && $nested > 0) { $nested--; continue; }
-            if ($text === ':') {
-                $condition = array_slice($tokens, 0, $question);
-                $then = array_slice($tokens, $question + 1, $index - $question - 1);
-                $otherwise = array_slice($tokens, $index + 1);
-                if ($condition === [] || $then === [] || $otherwise === []) {
-                    throw new \InvalidArgumentException('A frontend ternary must provide a condition and both values.');
-                }
-                return [$condition, $then, $otherwise];
-            }
-        }
-        throw new \InvalidArgumentException('A frontend ternary expression is missing its colon.');
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @param array<string, mixed> $locals */
     private static function expression(array $tokens, int &$index, array $states, array $locals, int $minimumPrecedence): mixed
     {
         $left = self::operand($tokens, $index, $states, $locals);
-        $precedence = ['<=>' => 2, '.' => 5, '+' => 10, '-' => 10, '*' => 20, '/' => 20, '%' => 20];
+        while (in_array($tokens[$index]['text'] ?? null, ['[', '(', '->', '?->', '::'], true)) {
+            if ($tokens[$index]['text'] === '::') $left = self::dynamicStaticMember($left, $tokens, $index, $states, $locals);
+            elseif ($tokens[$index]['text'] === '[') $left = self::readOffsets($left, $tokens, $index, $states, $locals);
+            elseif (in_array($tokens[$index]['text'], ['->', '?->'], true)) $left = self::objectMember($left, $tokens, $index, $states, $locals);
+            else $left = self::functionCall(self::nullsafeChain($left), $tokens, $index, $states, $locals);
+        }
+        $left = self::nullsafeChain($left);
+        $left = self::postfix($left, $tokens, $index);
+        $precedence = ['<<=' => 5, '>>=' => 5, '&=' => 5, '|=' => 5, '^=' => 5, 'or' => 1, 'xor' => 2, 'and' => 3, '=' => 5, '+=' => 5, '-=' => 5, '*=' => 5, '/=' => 5, '%=' => 5, '**=' => 5, '.=' => 5, '??=' => 5,
+            '?' => 10, '??' => 20, '||' => 30, '&&' => 40, '|' => 42, '^' => 44, '&' => 46,
+            '==' => 50, '!=' => 50, '<>' => 50, '===' => 50, '!==' => 50, '<=>' => 50,
+            '<' => 60, '>' => 60, '<=' => 60, '>=' => 60, '.' => 65, '<<' => 67, '>>' => 67,
+            '+' => 70, '-' => 70, '*' => 80, '/' => 80, '%' => 80, 'instanceof' => 88, '**' => 100];
         while ($index < count($tokens)) {
-            $operator = $tokens[$index]['text'];
+            $operator = in_array($tokens[$index]['id'], [T_LOGICAL_AND, T_LOGICAL_OR, T_LOGICAL_XOR], true) ? strtolower($tokens[$index]['text']) : $tokens[$index]['text'];
             $current = $precedence[$operator] ?? -1;
-            if ($current < $minimumPrecedence) break;
+            $assignable = self::isAssignable($left);
+            if ($current < $minimumPrecedence && !($current === 5 && $assignable)) break;
             $index++;
-            $right = self::expression($tokens, $index, $states, $locals, $current + 1);
-            $left = self::arithmetic($operator, $left, $right);
+            if ($operator === 'instanceof') {
+                $class = $tokens[$index] ?? [];
+                if (in_array($class['id'] ?? null, [T_STRING, T_STATIC, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE], true)) { $index++; $target = self::exceptionName($class['text']); }
+                else $target = self::expression($tokens, $index, $states, $locals, 89);
+                $left = new StateExpression('exceptionIs', $left, $target);
+                continue;
+            }
+            if ($operator === '?') {
+                $short = ($tokens[$index]['text'] ?? null) === ':';
+                $then = $short ? null : self::expression($tokens, $index, $states, $locals, 0);
+                if (($tokens[$index]['text'] ?? null) !== ':') throw new \InvalidArgumentException('A frontend ternary requires a colon.');
+                $index++;
+                $otherwise = self::expression($tokens, $index, $states, $locals, 11);
+                $left = $short ? new StateExpression('elvis', $left, $otherwise) : new StateConditional($left, 'truthy', true, $then, $otherwise);
+                continue;
+            }
+            $byReference = $operator === '=' && ($tokens[$index]['text'] ?? null) === '&';
+            if ($byReference) $index++;
+            $rightAssociative = in_array($operator, ['<<=', '>>=', '&=', '|=', '^=', '**', '??', '=', '+=', '-=', '*=', '/=', '%=', '**=', '.=', '??='], true);
+            $right = self::expression($tokens, $index, $states, $locals, $current + ($rightAssociative ? 0 : 1));
+            if ($current === 5) {
+                self::assertAssignable($left);
+                if ($byReference) { if (!$right instanceof StateExpression || !in_array($right->operation, ['call', 'objectCall', 'builtin'], true)) self::assertAssignable($right); $left = new StateExpression('assignReference', $left, $right); continue; }
+                if ($operator === '??=') { $left = new StateExpression('coalesceAssign', $left, $right); continue; }
+                $left = $operator === '=' ? new StateExpression('assign', $left, $right) : new StateExpression('compoundAssign', $left, ['operator' => substr($operator, 0, -1), 'value' => $right]);
+            } else $left = self::binary($operator, $left, $right);
         }
         return $left;
+    }
+
+    private static function postfix(mixed $value, array $tokens, int &$index): mixed
+    {
+        if (!in_array($tokens[$index]['id'] ?? null, [T_INC, T_DEC], true)) return $value;
+        self::assertAssignable($value);
+        return new StateExpression($tokens[$index++]['id'] === T_INC ? 'postIncrement' : 'postDecrement', $value, null);
+    }
+
+    private static function binary(string $operator, mixed $left, mixed $right): mixed
+    {
+        $operation = ['<<' => 'shiftLeft', '>>' => 'shiftRight', 'xor' => 'xor', 'and' => 'and', 'or' => 'or', '**' => 'power', '&&' => 'and', '||' => 'or', '??' => 'coalesce', '|' => 'bitOr', '&' => 'bitAnd', '^' => 'bitXor',
+            '==' => 'equal', '!=' => 'notEqual', '<>' => 'notEqual', '===' => 'identical', '!==' => 'notIdentical',
+            '<' => 'less', '<=' => 'lessEqual', '>' => 'greater', '>=' => 'greaterEqual'][$operator] ?? null;
+        if ($operation === null || $operator === '**') return self::arithmetic($operator, $left, $right);
+        return new StateExpression($operation, $left, $right);
+    }
+
+    private static function assertAssignable(mixed $value): void
+    {
+        if (self::nullsafeChain($value) !== $value || !self::isAssignable($value)) {
+            throw new \InvalidArgumentException('An assignment or increment must target a local variable or #[State] property.');
+        }
+    }
+
+    private static function invalidateMutatedLocals(array $node, array &$locals): void
+    {
+        $expression = $node['$expression'] ?? null;
+        if (($expression['operation'] ?? null) === 'assignReference' && isset($expression['right']['$local'])) { $name = hex2bin(substr($expression['right']['$local'], 1)); $locals[$name] = new FrontendLocal($name, $expression['right']); }
+        if (($expression['operation'] ?? null) === 'dynamicLocal' || ($expression['operation'] ?? null) === 'builtin' && in_array($expression['left'], ['extract'], true)) {
+            $locals['__aml_eval_scope__'] = true;
+            foreach ($locals as $name => $local) if ($local instanceof FrontendLocal) $locals[$name] = new FrontendLocal($name, $local->reference());
+        }
+        if (($expression['operation'] ?? null) === 'eval') foreach ($locals as $name => $local) if ($local instanceof FrontendLocal) $locals[$name] = new FrontendLocal($name, $local->reference());
+        if (($expression['operation'] ?? null) === 'builtin') {
+            foreach ($expression['right']['arguments'] as $argument) if ($argument['reference'] && isset($argument['value']['$local'])) {
+                $name = hex2bin(substr($argument['value']['$local'], 1));
+                $locals[$name] = new FrontendLocal($name, $argument['value']);
+            }
+        }
+        if (($expression['operation'] ?? null) === 'closure') {
+            foreach ($expression['right'] as $capture) if ($capture['reference'] && isset($capture['value']['$local'])) {
+                $name = hex2bin(substr($capture['value']['$local'], 1));
+                $locals[$name] = new FrontendLocal($name, $capture['value']);
+            }
+        }
+        if (($expression['operation'] ?? null) === 'call' && ($expression['left']['$expression']['operation'] ?? null) === 'functionRef') {
+            $definition = self::$functions[$expression['left']['$expression']['left']] ?? [];
+            foreach ($expression['right']['arguments'] as $index => $argument) {
+                $parameter = $definition['parameters'][$index] ?? null;
+                if (isset($argument['name'])) foreach ($definition['parameters'] ?? [] as $candidate) if ($candidate['name'] === $argument['name']) $parameter = $candidate;
+                if (($parameter['reference'] ?? false) && isset($argument['value']['$local'])) {
+                    $name = hex2bin(substr($argument['value']['$local'], 1));
+                    $locals[$name] = new FrontendLocal($name, $argument['value']);
+                }
+            }
+        }
+        if (is_array($expression) && in_array($expression['operation'], ['assignReference', 'assign', 'coalesceAssign', 'preIncrement', 'postIncrement', 'preDecrement', 'postDecrement'], true) && isset($expression['left']['$local'])) {
+            $name = hex2bin(substr($expression['left']['$local'], 1));
+            $locals[$name] = new FrontendLocal($name, $expression['left']);
+        }
+        foreach ($node as $value) if (is_array($value)) self::invalidateMutatedLocals($value, $locals);
+    }
+
+    private static function validateLocals(mixed $value, array $locals, bool $quiet = false, bool $deferred = false): void
+    {
+        if ($value instanceof StateExpression) {
+            if ($value->operation === 'nullsafeChain') {self::validateNullsafeLocals($value->left,$locals,$quiet,$deferred);return;}
+            if ($value->operation === 'assignReference') { self::validateLocals($value->left, $locals, true, $deferred); self::validateLocals($value->right, $locals, true, $deferred); return; }
+            if ($value->operation === 'eval') { self::validateLocals($value->left, $locals, false, $deferred); return; }
+            if (in_array($value->operation, ['closure', 'functionRef', 'display'], true)) return;
+            if ($value->operation === 'builtin') {
+                foreach ($value->right['arguments'] as $argument) self::validateLocals($argument['value'], $locals, $argument['reference'], $deferred);
+                return;
+            }
+            if ($value->operation === 'call') {
+                self::validateLocals($value->left, $locals, false, $deferred);
+                $definition = $value->left instanceof StateExpression && $value->left->operation === 'functionRef' ? (self::$functions[$value->left->left] ?? []) : [];
+                foreach ($value->right['arguments'] as $index => $argument) {
+                    $parameter = $definition['parameters'][$index] ?? null;
+                    if (isset($argument['name'])) foreach ($definition['parameters'] ?? [] as $candidate) if ($candidate['name'] === $argument['name']) $parameter = $candidate;
+                    self::validateLocals($argument['value'], $locals, $parameter['reference'] ?? false, $deferred);
+                }
+                return;
+            }
+            $allowsMissing = in_array($value->operation, ['coalesce', 'coalesceAssign', 'isset', 'empty', 'unsetOffset'], true);
+            self::validateLocals($value->left, $locals, $allowsMissing || ($quiet && $value->operation === 'offset'), $deferred);
+            self::validateLocals($value->right, $locals, false, $deferred || in_array($value->operation, ['and', 'or', 'coalesce', 'coalesceAssign', 'elvis', 'match'], true));
+        } elseif ($value instanceof StateConditional) {
+            self::validateLocals($value->left, $locals, false, $deferred);
+            self::validateLocals($value->right, $locals, false, $deferred);
+            self::validateLocals($value->then, $locals, false, true);
+            self::validateLocals($value->otherwise, $locals, false, true);
+        } elseif (is_array($value)) {
+            if (isset($value['$local'])) {
+                $name = hex2bin(substr($value['$local'], 1));
+                if (!$quiet && !$deferred && !isset($locals['__aml_eval_scope__']) && !array_key_exists($name, $locals)) throw new \OutOfBoundsException("Undefined frontend local variable: \${$name}");
+            } else foreach ($value as $part) { self::validateLocals($part, $locals, false, $deferred); $normalized = normalizeReactiveValue($part); if (is_array($normalized)) self::invalidateMutatedLocals($normalized, $locals); }
+        }
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @param array<string, mixed> $locals */
@@ -1044,184 +793,87 @@ final class FrontendClosureCompiler
     {
         $token = $tokens[$index] ?? null;
         if ($token === null) throw new \InvalidArgumentException('Incomplete frontend expression.');
-        if ($token['id'] === T_ISSET && ($tokens[$index + 1]['text'] ?? null) === '(') {
-            [$argumentTokens, $after] = self::delimited($tokens, $index + 1, '(', ')');
-            $arguments = self::splitArguments($argumentTokens);
-            if (count($arguments) !== 1) {
-                throw new \InvalidArgumentException('Frontend isset() expects exactly one state value.');
+        if(in_array($token['id'],[T_STRING,T_NAME_QUALIFIED,T_NAME_FULLY_QUALIFIED,T_NAME_RELATIVE,T_STATIC],true) && ($tokens[$index+1]['id']??null)===T_DOUBLE_COLON && in_array($tokens[$index+2]['id']??null,[T_STRING,T_CLASS],true) && ($tokens[$index+3]['text']??'')!=='(') { $name=self::exceptionName($token['text']);$member=$tokens[$index+2];$index+=3;return new StateExpression($member['id']===T_CLASS?'objectClass':'objectConstant',strtolower($token['text'])==='static'?'@static':$name,$member['text']); }
+        if ($token['id'] !== T_VARIABLE && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && (($tokens[$index + 2]['id'] ?? null) === T_VARIABLE || ($tokens[$index + 2]['text'] ?? null) === '$') && ($tokens[$index + 3]['text'] ?? null) !== '(') return self::objectStaticProperty($tokens, $index, $states, $locals);
+        if (in_array($token['id'], [T_YIELD, T_YIELD_FROM], true)) {
+            $index++;
+            if ($token['id'] === T_YIELD_FROM) return new StateExpression('yieldFrom', self::expression($tokens, $index, $states, $locals, 0), null);
+            $first = !isset($tokens[$index]) || in_array($tokens[$index]['text'], [')', ']', ',', ':'], true) ? null : self::expression($tokens, $index, $states, $locals, 0);
+            if (($tokens[$index]['id'] ?? null) === T_DOUBLE_ARROW) {
+                $index++;
+                return new StateExpression('yield', $first, ['value' => self::expression($tokens, $index, $states, $locals, 0), 'keyed' => true]);
             }
-            $index = $after;
-            return new StateExpression('isset', self::value($arguments[0], $states, $locals), null);
+            return new StateExpression('yield', null, ['value' => $first, 'keyed' => false]);
         }
+        if ($token['id'] === T_EVAL) return self::evalCall($tokens, $index, $states, $locals);
+        if ($token['id'] === T_NEW) return self::newObject($tokens, $index, $states, $locals);
+        if ($token['id'] === T_CLONE) { $index++; return new StateExpression('objectClone', self::expression($tokens, $index, $states, $locals, 90), null); }
+        if ($token['id'] === T_THROW) { $index++; return new StateExpression('throw', self::expression($tokens, $index, $states, $locals, 0), $token['source'] ?? null); }
+        if (in_array($token['id'], [T_FN, T_FUNCTION], true) || ($token['id'] === T_STATIC && in_array($tokens[$index + 1]['id'] ?? null, [T_FN, T_FUNCTION], true))) return self::closureExpression($tokens, $index, $states, $locals);
+        if (($token['text'] === '$this' && self::$objectScope === null && ($tokens[$index + 3]['text'] ?? null) === '(')
+            || ($token['id'] !== T_VARIABLE && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && ($tokens[$index + 3]['text'] ?? null) === '(')) {
+            if (($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && self::isObjectClassTarget($tokens[$index]['text'])) return self::objectStaticCall($tokens, $index, $states, $locals);
+            $target = self::methodReference($tokens, $index);
+            return self::functionCall($target, $tokens, $index, $states, $locals);
+        }
+        if ($token['id'] === T_MATCH) return self::matchExpression($tokens, $index, $states, $locals);
+        if ($token['text'] === '[' || $token['id'] === T_ARRAY) return self::arrayExpression($tokens, $index, $states, $locals);
+        if (array_key_exists('constant', $token)) { $index++; return $token['constant']; }
+        if ($token['id'] === 'interpolated-string') return self::interpolatedString($tokens, $index, $states, $locals);
+        if (in_array($token['id'], [T_ISSET, T_EMPTY], true) && ($tokens[$index + 1]['text'] ?? null) === '(') {
+            [$argumentTokens, $index] = self::delimited($tokens, $index + 1, '(', ')');
+            $arguments = self::splitTopLevel($argumentTokens, ',');
+            if ($token['id'] === T_EMPTY && count($arguments) !== 1) throw new \InvalidArgumentException('empty() expects one value.');
+            $checks = array_map(static fn (array $part): mixed => new StateExpression($token['id'] === T_EMPTY ? 'empty' : 'isset', self::value($part, $states, $locals, true), null), $arguments);
+            $value = array_shift($checks);
+            foreach ($checks as $check) $value = new StateExpression('and', $value, $check);
+            return $value;
+        }
+        if ($token['text'] === '~') { $index++; return new StateExpression('bitNot', self::expression($tokens, $index, $states, $locals, 90), null); }
         $castOperation = match ($token['id']) {
             T_INT_CAST => 'toInt',
             T_DOUBLE_CAST => 'toFloat',
             T_STRING_CAST => 'toString',
             T_BOOL_CAST => 'toBool',
+            T_ARRAY_CAST => 'toArray',
+            T_OBJECT_CAST => 'toObject',
             default => null,
         };
         if ($castOperation !== null) {
             $index++;
-            return new StateExpression($castOperation, self::operand($tokens, $index, $states, $locals), null);
+            return new StateExpression($castOperation, self::expression($tokens, $index, $states, $locals, 90), null);
         }
-        if ($token['id'] === T_STRING && ($tokens[$index + 1]['text'] ?? null) === '(') {
-            $function = strtolower($token['text']);
-            if (!in_array($function, [
-                'count', 'array_sum', 'in_array', 'array_filter', 'array_map', 'array_reduce',
-                'array_find', 'array_any', 'array_all', 'array_column', 'array_unique',
-                'array_reverse', 'array_slice', 'array_merge', 'array_search', 'array_key_exists',
-                'ceil', 'floor', 'round', 'min', 'max',
-            ], true)) {
+        if (in_array($token['id'], [T_STRING, T_NAME_FULLY_QUALIFIED, T_NAME_QUALIFIED, T_NAME_RELATIVE], true) && ($tokens[$index + 1]['text'] ?? null) === '(') {
+            $custom = self::namedFunction($token['text']);
+            if ($custom !== null) { $index++; return self::functionCall(new StateExpression('functionRef', $custom, null), $tokens, $index, $states, $locals); }
+            $function = strtolower(self::resolvedFunctionName($token['text']));
+            if ($function === 'assert') return self::assertionCall($tokens, $index, $states, $locals);
+            if (in_array($function, \AML\Engine\BuiltinFunctions::NAMES, true)) return self::builtinCall($function, $tokens, $index, $states, $locals);
+            if (str_starts_with($function, 'mb_') && (!function_exists($function) || (new \ReflectionFunction($function))->isInternal())) throw new \InvalidArgumentException("{$function}() is outside the browser UTF-8 subset. Use the supported mb_* text functions; encoding configuration, conversions, HTTP/mail and mbregex remain in PHP execution.");
+            if (in_array($function, ['compact', 'extract'], true)) throw new \InvalidArgumentException("{$function}() depends on PHP's dynamic variable table. In browser events, build an explicit array or destructure it with [\$a, \$b] = \$values.");
+            if (in_array($function, ['setlocale', 'localeconv', 'strcoll', 'nl_langinfo'], true)) throw new \InvalidArgumentException("{$function}() depends on the PHP process locale and cannot run in a browser event. Use an explicit number_format() format or SORT_STRING/SORT_NATURAL.");
+            if (in_array($function, ['hebrev', 'utf8_encode', 'utf8_decode', 'convert_cyr_string'], true)) throw new \InvalidArgumentException("{$function}() uses legacy byte encodings. Frontend strings must remain valid UTF-8; convert legacy input before passing it to View.");
+            if (in_array($function, ['crypt', 'md5_file', 'sha1_file'], true)) throw new \InvalidArgumentException("{$function}() requires PHP process or server file facilities. Hash local text with md5()/sha1() for compatibility only; keep password hashing in the backend.");
+            if (in_array($function, ['fprintf', 'vfprintf'], true)) self::consoleOnlyError($function . '()');
+            if (in_array($function, ['error_log', 'set_error_handler', 'set_exception_handler', 'restore_error_handler', 'restore_exception_handler', 'error_reporting', 'ini_set', 'assert_options', 'trigger_error'], true)) throw new \InvalidArgumentException("{$function}() configures PHP process error handling. In browser events use Console::log/warning/error, try/catch, throw and assert; configure PHP development/production mode outside the event.");
+            if (in_array($function, ['file_get_contents', 'file_put_contents', 'file_exists', 'is_file', 'is_dir', 'is_readable', 'is_writable', 'fopen', 'fclose', 'fread', 'readfile', 'file', 'copy', 'rename', 'unlink', 'mkdir', 'rmdir', 'scandir', 'glob', 'realpath', 'chmod', 'chown', 'fileperms', 'filesize', 'touch', 'fgetcsv', 'fputcsv'], true)) self::fileOnlyError($function . '()');
+            if (in_array($function, ['fgets', 'fgetc', 'fscanf', 'fwrite', 'fputs', 'fflush', 'readline', 'stream_get_contents', 'exit', 'die'], true)) self::consoleOnlyError($function . '()');
+            if (!in_array($function, ['gettype', 'intval', 'floatval', 'doubleval', 'strval', 'boolval'], true)) {
+                if (isset($locals['__aml_eval_scope__'])) { $index++; return self::functionCall($function, $tokens, $index, $states, $locals); }
                 throw new \InvalidArgumentException("Unsupported frontend function: {$token['text']}()");
             }
             [$argumentTokens, $after] = self::delimited($tokens, $index + 1, '(', ')');
             $arguments = self::splitArguments($argumentTokens);
             $index = $after;
-            if ($function === 'array_filter') {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException('Frontend array_filter() expects a collection and one arrow callback.');
-                }
-                $collection = self::value($arguments[0], $states, $locals);
-                $callback = self::arrowCallback($arguments[1], 1, $states, $locals, true);
-                return new StateExpression('filter', $collection, $callback);
+            $conversion = ['intval' => 'toInt', 'floatval' => 'toFloat', 'doubleval' => 'toFloat', 'strval' => 'toString', 'boolval' => 'toBool'][$function] ?? null;
+            if ($conversion !== null) {
+                if (count($arguments) !== 1) throw new \InvalidArgumentException("Frontend {$function}() expects exactly one value; use a scalar cast for the default conversion.");
+                return new StateExpression($conversion, self::value($arguments[0], $states, $locals), null);
             }
-            if ($function === 'array_map') {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException('Frontend array_map() expects one arrow callback and one collection.');
-                }
-                $callback = self::arrowCallback($arguments[0], 1, $states, $locals, false);
-                $collection = self::value($arguments[1], $states, $locals);
-                return new StateExpression('map', $collection, $callback);
+            if ($function === 'gettype') {
+                if (count($arguments) !== 1) throw new \InvalidArgumentException('gettype() expects exactly one value.');
+                return new StateExpression('gettype', self::value($arguments[0], $states, $locals), null);
             }
-            if ($function === 'array_reduce') {
-                if (count($arguments) < 2 || count($arguments) > 3) {
-                    throw new \InvalidArgumentException('Frontend array_reduce() expects a collection, an arrow callback and an optional initial value.');
-                }
-                $collection = self::value($arguments[0], $states, $locals);
-                $callback = self::arrowCallback($arguments[1], 2, $states, $locals, false);
-                $callback['initial'] = isset($arguments[2]) ? self::value($arguments[2], $states, $locals) : null;
-                return new StateExpression('reduce', $collection, $callback);
-            }
-            if (in_array($function, ['array_find', 'array_any', 'array_all'], true)) {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException("Frontend {$function}() expects a collection and one arrow callback.");
-                }
-                $operation = match ($function) {
-                    'array_find' => 'find', 'array_any' => 'any', 'array_all' => 'all',
-                };
-                return new StateExpression(
-                    $operation,
-                    self::value($arguments[0], $states, $locals),
-                    self::arrowCallback($arguments[1], 1, $states, $locals, true),
-                );
-            }
-            if ($function === 'array_column') {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException('Frontend array_column() expects a collection and one literal column name.');
-                }
-                $column = self::value($arguments[1], $states, $locals);
-                if (!is_string($column) || !preg_match('/^[A-Za-z_][A-Za-z0-9_-]*$/', $column)
-                    || in_array(strtolower($column), ['__proto__', 'prototype', 'constructor'], true)) {
-                    throw new \InvalidArgumentException('Frontend array_column() requires a safe literal column name.');
-                }
-                return new StateExpression('column', self::value($arguments[0], $states, $locals), $column);
-            }
-            if ($function === 'array_unique') {
-                if (count($arguments) !== 1) {
-                    throw new \InvalidArgumentException('Frontend array_unique() expects exactly one collection.');
-                }
-                return new StateExpression('unique', self::value($arguments[0], $states, $locals), null);
-            }
-            if ($function === 'array_reverse') {
-                if (count($arguments) !== 1) {
-                    throw new \InvalidArgumentException('Frontend array_reverse() expects exactly one collection.');
-                }
-                return new StateExpression('reverse', self::value($arguments[0], $states, $locals), null);
-            }
-            if ($function === 'array_slice') {
-                if (count($arguments) < 2 || count($arguments) > 3) {
-                    throw new \InvalidArgumentException('Frontend array_slice() expects a collection, an offset and an optional length.');
-                }
-                $options = ['offset' => self::value($arguments[1], $states, $locals)];
-                if (isset($arguments[2])) $options['length'] = self::value($arguments[2], $states, $locals);
-                return new StateExpression('slice', self::value($arguments[0], $states, $locals), $options);
-            }
-            if ($function === 'array_merge') {
-                if (count($arguments) < 2) {
-                    throw new \InvalidArgumentException('Frontend array_merge() expects at least two collections.');
-                }
-                $collections = array_map(
-                    static fn (array $argument): mixed => self::value($argument, $states, $locals),
-                    $arguments,
-                );
-                $first = array_shift($collections);
-                return new StateExpression('merge', $first, $collections);
-            }
-            if ($function === 'array_search') {
-                if (count($arguments) !== 3 || self::value($arguments[2], $states, $locals) !== true) {
-                    throw new \InvalidArgumentException('Frontend array_search() requires a needle, a collection and strict=true.');
-                }
-                return new StateExpression(
-                    'search',
-                    self::value($arguments[1], $states, $locals),
-                    self::value($arguments[0], $states, $locals),
-                );
-            }
-            if ($function === 'array_key_exists') {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException('Frontend array_key_exists() expects a key and a collection.');
-                }
-                return new StateExpression(
-                    'keyExists',
-                    self::value($arguments[1], $states, $locals),
-                    self::value($arguments[0], $states, $locals),
-                );
-            }
-            if (in_array($function, ['ceil', 'floor'], true)) {
-                if (count($arguments) !== 1) {
-                    throw new \InvalidArgumentException("Frontend {$function}() expects exactly one argument.");
-                }
-                return new StateExpression($function, self::value($arguments[0], $states, $locals), null);
-            }
-            if ($function === 'round') {
-                if (count($arguments) < 1 || count($arguments) > 2) {
-                    throw new \InvalidArgumentException('Frontend round() expects a value and an optional precision.');
-                }
-                return new StateExpression(
-                    'round',
-                    self::value($arguments[0], $states, $locals),
-                    isset($arguments[1]) ? self::value($arguments[1], $states, $locals) : 0,
-                );
-            }
-            if (in_array($function, ['min', 'max'], true)) {
-                if (count($arguments) !== 2) {
-                    throw new \InvalidArgumentException("Frontend {$function}() expects exactly two values.");
-                }
-                return new StateExpression(
-                    $function,
-                    self::value($arguments[0], $states, $locals),
-                    self::value($arguments[1], $states, $locals),
-                );
-            }
-            if (in_array($function, ['count', 'array_sum'], true)) {
-                if (count($arguments) !== 1) {
-                    throw new \InvalidArgumentException("Frontend {$function}() expects exactly one argument.");
-                }
-                $value = self::value($arguments[0], $states, $locals);
-                if (is_array($value) && !isset($value['$loop'])) {
-                    return $function === 'count' ? count($value) : array_sum($value);
-                }
-                return new StateExpression($function === 'count' ? 'count' : 'sum', $value, null);
-            }
-            if (count($arguments) < 2 || count($arguments) > 3) {
-                throw new \InvalidArgumentException('Frontend in_array() expects two arguments and an optional strict=true argument.');
-            }
-            if (isset($arguments[2]) && self::value($arguments[2], $states, $locals) !== true) {
-                throw new \InvalidArgumentException('Frontend in_array() only supports strict comparison; pass true as its third argument.');
-            }
-            $needle = self::value($arguments[0], $states, $locals);
-            $haystack = self::value($arguments[1], $states, $locals);
-            return new StateExpression('contains', $haystack, $needle);
         }
         if ($token['text'] === '(') {
             $index++;
@@ -1230,16 +882,33 @@ final class FrontendClosureCompiler
             $index++;
             return $value;
         }
+        if ($token['text'] === '+') { $index++; return self::arithmetic('+', 0, self::expression($tokens, $index, $states, $locals, 90)); }
         if ($token['text'] === '-') {
             $index++;
-            return self::arithmetic('*', -1, self::operand($tokens, $index, $states, $locals));
+            return self::arithmetic('*', -1, self::expression($tokens, $index, $states, $locals, 90));
         }
         if ($token['text'] === '!') {
             $index++;
-            $value = self::operand($tokens, $index, $states, $locals);
+            $value = self::expression($tokens, $index, $states, $locals, 85);
             return is_bool($value) ? !$value : new StateExpression('not', $value, null);
         }
+        if (in_array($token['id'], [T_INC, T_DEC], true)) {
+            $index++;
+            $target = self::expression($tokens, $index, $states, $locals, 101);
+            self::assertAssignable($target);
+            return new StateExpression($token['id'] === T_INC ? 'preIncrement' : 'preDecrement', $target, null);
+        }
+        if ($token['text'] === '$') {
+            $index++;
+            if (($tokens[$index]['text'] ?? null) === '{') { [$body, $index] = self::delimited($tokens, $index, '{', '}'); $name = self::value($body, $states, $locals); }
+            else $name = self::operand($tokens, $index, $states, $locals);
+            return new StateExpression('dynamicLocal', $name, null);
+        }
         if ($token['id'] === T_VARIABLE) {
+            if ($token['text'] === '$this' && self::$objectScope !== null) {
+                if (!self::$functionAllowsThis) throw new \InvalidArgumentException('Using $this outside a bound frontend function.');
+                $index++; return new StateExpression('objectThis', null, null);
+            }
             if ($token['text'] === '$this') {
                 if (($tokens[$index + 1]['id'] ?? null) !== T_OBJECT_OPERATOR || ($tokens[$index + 2]['id'] ?? null) !== T_STRING) {
                     throw new \InvalidArgumentException('A frontend state reference must use $this->property.');
@@ -1247,115 +916,37 @@ final class FrontendClosureCompiler
                 $name = $tokens[$index + 2]['text'];
                 if (!isset($states[$name])) throw new \OutOfBoundsException("Unknown AML View #[State] property in frontend closure: {$name}");
                 $index += 3;
-                $path = $name;
-                $initial = $states[$name]->initial;
-                while (($tokens[$index]['text'] ?? null) === '[') {
-                    $segment = $tokens[$index + 1] ?? null;
-                    if ($segment === null || !in_array($segment['id'], [T_CONSTANT_ENCAPSED_STRING, T_LNUMBER], true)
-                        || ($tokens[$index + 2]['text'] ?? null) !== ']') {
-                        throw new \InvalidArgumentException('Frontend state reads support only literal string or integer keys.');
-                    }
-                    $key = $segment['id'] === T_LNUMBER ? $segment['text'] : self::stringLiteral($segment['text']);
-                    if (!preg_match('/^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/', (string) $key)
-                        || in_array(strtolower((string) $key), ['__proto__', 'prototype', 'constructor'], true)) {
-                        throw new \InvalidArgumentException("Unsafe frontend state key: {$key}");
-                    }
-                    $path .= '.' . $key;
-                    $initial = is_array($initial) && array_key_exists($key, $initial) ? $initial[$key] : null;
-                    $index += 3;
-                }
-                return $path === $name ? $states[$name] : StateRef::to($path, $initial);
+                return self::readOffsets($states[$name], $tokens, $index, $states, $locals);
             }
             $name = substr($token['text'], 1);
-            if (!array_key_exists($name, $locals)) throw new \OutOfBoundsException("Undefined frontend local variable: \${$name}");
+            if (in_array($name, ['argv', 'argc'], true) && !array_key_exists($name, $locals)) self::consoleOnlyError('$' . $name);
+            $locals[$name] ??= new FrontendLocal($name, null);
             $index++;
-            $value = $locals[$name];
-            while (($tokens[$index]['text'] ?? null) === '[') {
-                $segment = $tokens[$index + 1] ?? null;
-                if ($segment === null || !in_array($segment['id'], [T_CONSTANT_ENCAPSED_STRING, T_LNUMBER], true)
-                    || ($tokens[$index + 2]['text'] ?? null) !== ']') {
-                    throw new \InvalidArgumentException('Frontend foreach values support only literal array keys.');
-                }
-                if (!is_array($value) || (!isset($value['$loop']) && !isset($value['$collection']))) {
-                    throw new \InvalidArgumentException('Frontend array access is limited to scoped foreach and collection callback values.');
-                }
-                $path = $segment['id'] === T_LNUMBER ? $segment['text'] : self::stringLiteral($segment['text']);
-                if (!preg_match('/^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/', (string) $path)
-                    || in_array(strtolower((string) $path), ['__proto__', 'prototype', 'constructor'], true)) {
-                    throw new \InvalidArgumentException("Unsafe frontend foreach key: {$path}");
-                }
-                $scope = isset($value['$loop']) ? '$loop' : '$collection';
-                $value[$scope] .= '.' . $path;
-                $index += 3;
-            }
-            return $value;
+            $value = $locals[$name] instanceof FrontendLocal ? $locals[$name]->reference() : $locals[$name];
+            return self::readOffsets($value, $tokens, $index, $states, $locals);
         }
         $index++;
         return match ($token['id']) {
-            T_LNUMBER => (int) $token['text'],
-            T_DNUMBER => (float) $token['text'],
+            T_LNUMBER => self::integerLiteral($token['text']),
+            T_DNUMBER => self::literalValue((float) str_replace('_', '', $token['text'])),
             T_CONSTANT_ENCAPSED_STRING => self::stringLiteral($token['text']),
             T_STRING => match (strtolower($token['text'])) {
                 'true' => true, 'false' => false, 'null' => null,
-                default => throw new \InvalidArgumentException("Unsupported frontend literal: {$token['text']}"),
+                default => throw new \InvalidArgumentException("Undefined frontend constant: {$token['text']}"),
             },
             default => throw new \InvalidArgumentException("Unsupported frontend expression value: {$token['text']}"),
         };
     }
 
     /**
-     * Compile a deliberately small PHP arrow callback used by an allowlisted
-     * collection function. Parameter types and return types are accepted but
-     * never executed; only the expression after => is serialized.
+     * Compile a callable value for a supported collection operation. Parameter
+     * and return contracts are enforced by the same runtime as ordinary calls.
      *
      * @param list<array{id: int|string, text: string}> $tokens
      * @param array<string, StateRef> $states
      * @param array<string, mixed> $locals
-     * @return array{\$callback: array{parameters: list<string>, expression: mixed}}
+     * @return array{\$callable: mixed}
      */
-    private static function arrowCallback(
-        array $tokens,
-        int $parameterCount,
-        array $states,
-        array $locals,
-        bool $predicate,
-    ): array {
-        if (($tokens[0]['id'] ?? null) !== T_FN || ($tokens[1]['text'] ?? null) !== '(') {
-            throw new \InvalidArgumentException('Frontend collection callbacks must use a PHP arrow function (fn).');
-        }
-        [$parameterTokens, $after] = self::delimited($tokens, 1, '(', ')');
-        $parameterGroups = self::splitArguments($parameterTokens);
-        if (count($parameterGroups) !== $parameterCount) {
-            throw new \InvalidArgumentException("Frontend collection callback expects {$parameterCount} parameter(s).");
-        }
-        $parameters = [];
-        foreach ($parameterGroups as $group) {
-            $variables = array_values(array_filter($group, static fn (array $token): bool => $token['id'] === T_VARIABLE));
-            if (count($variables) !== 1
-                || array_filter($group, static fn (array $token): bool => in_array($token['text'], ['&', '...', '='], true))) {
-                throw new \InvalidArgumentException('Frontend collection callback parameters cannot use references, variadics or defaults.');
-            }
-            $name = substr($variables[0]['text'], 1);
-            if (isset($parameters[$name])) {
-                throw new \InvalidArgumentException('Duplicate frontend collection callback parameter: $' . $name);
-            }
-            $parameters[$name] = ['$collection' => $name];
-        }
-        while ($after < count($tokens) && ($tokens[$after]['id'] ?? null) !== T_DOUBLE_ARROW) $after++;
-        if (($tokens[$after]['id'] ?? null) !== T_DOUBLE_ARROW || $after + 1 >= count($tokens)) {
-            throw new \InvalidArgumentException('Frontend collection arrow callback must contain => and an expression.');
-        }
-        $expressionTokens = array_slice($tokens, $after + 1);
-        $callbackLocals = [...$locals, ...$parameters];
-        if ($predicate) {
-            [$left, $operator, $right] = self::condition($expressionTokens, $states, $callbackLocals);
-            $expression = new StateConditional($left, $operator, $right, true, false);
-        } else {
-            $expression = self::value($expressionTokens, $states, $callbackLocals);
-        }
-        return ['$callback' => ['parameters' => array_keys($parameters), 'expression' => $expression]];
-    }
-
     private static function arithmetic(string $operator, mixed $left, mixed $right): mixed
     {
         if ($operator === '<=>') {
@@ -1367,44 +958,275 @@ final class FrontendClosureCompiler
             return new StateExpression('concat', $left, $right);
         }
         $operation = match ($operator) {
-            '+' => 'add', '-' => 'subtract', '*' => 'multiply', '/' => 'divide', '%' => 'modulo',
+            '+' => 'add', '-' => 'subtract', '*' => 'multiply', '/' => 'divide', '%' => 'modulo', '**' => 'power',
             default => throw new \InvalidArgumentException("Unsupported frontend arithmetic operator: {$operator}"),
         };
-        if (is_numeric($left) && is_numeric($right)) {
-            if (in_array($operator, ['/', '%'], true) && (float) $right === 0.0) throw new \DivisionByZeroError('Division by zero in frontend expression.');
-            return match ($operator) {
+        $numericLeft = is_array($left) && array_key_exists('$float', $left) ? (float) $left['$float'] : $left;
+        $numericRight = is_array($right) && array_key_exists('$float', $right) ? (float) $right['$float'] : $right;
+        if (is_numeric($numericLeft) && is_numeric($numericRight) && !in_array($operator, ['/', '%', '**'], true)) {
+            $left = $numericLeft; $right = $numericRight;
+            try { return self::literalValue(match ($operator) {
                 '+' => $left + $right, '-' => $left - $right, '*' => $left * $right,
-                '/' => $left / $right, '%' => $left % $right,
-            };
+            }); } catch (\InvalidArgumentException) { /* Keep runtime failures lazy. */ }
         }
         return new StateExpression($operation, $left, $right);
     }
 
+    /** @param array<string, mixed> $locals @return array<string, mixed> */
+    private static function knownLocals(array $locals): array
+    {
+        return array_map(static fn (mixed $local): mixed => $local instanceof FrontendLocal ? $local->known : $local, $locals);
+    }
+
+    private static function assertLocalName(string $name): void
+    {
+        if (preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/D', $name) !== 1
+            || in_array($name, ['this', 'GLOBALS', '_SERVER', '_GET', '_POST', '_FILES', '_COOKIE', '_SESSION', '_REQUEST', '_ENV'], true)) {
+            throw new \InvalidArgumentException("Unsupported frontend local variable: \${$name}");
+        }
+    }
+
+    private static function literalValue(mixed $value, int $depth = 0): mixed
+    {
+        if ($value instanceof \UnitEnum && $value::class === 'RoundingMode') return new StateExpression('roundingMode', $value->name, null);
+        if ($value instanceof \UnitEnum) return new StateExpression('enumCase', self::registerClass($value::class), $value->name);
+        if ($depth >= 512) throw new \InvalidArgumentException('Frontend literal exceeds JSON nesting depth.');
+        if (is_int($value) && abs($value) > 9007199254740991) {
+            throw new \InvalidArgumentException('Frontend integers must stay within JavaScript safe integer precision.');
+        }
+        if (is_float($value)) {
+            if (!is_finite($value)) throw new \InvalidArgumentException('Frontend float literals must be finite.');
+            // Plain JSON turns -0.0 into the integer -0 in some manifests.
+            return ['$float' => $value === 0.0 && fdiv(1.0, $value) < 0 ? '-0' : $value];
+        }
+        if (is_array($value)) {
+            $entries = [];
+            foreach ($value as $key => $item) $entries[] = ['key' => $key, 'value' => self::literalValue($item, $depth + 1)];
+            return new StateExpression('array', $entries, null);
+        }
+        if (!is_scalar($value) && $value !== null) throw new \InvalidArgumentException('Frontend constants and captures must contain scalar, null or array values.');
+        return $value;
+    }
+
+    private static function integerLiteral(string $text): int
+    {
+        $text = str_replace('_', '', $text);
+        $value = str_starts_with(strtolower($text), '0o') ? intval(substr($text, 2), 8) : intval($text, 0);
+        self::literalValue($value);
+        return $value;
+    }
+
+    /** Keep string punctuation out of the statement and block grammar. */
+    private static function packStrings(array $tokens): array
+    {
+        $packed = [];
+        for ($index = 0; $index < count($tokens); $index++) {
+            if ($tokens[$index]['id'] === T_START_HEREDOC) {
+                $start = $tokens[$index]; $parts = [];
+                $nowdoc = str_contains($start['text'], "'");
+                for ($index++; $index < count($tokens) && $tokens[$index]['id'] !== T_END_HEREDOC; $index++) $parts[] = $tokens[$index];
+                if ($index >= count($tokens)) throw new \InvalidArgumentException('Unclosed frontend heredoc.');
+                preg_match('/^[ \t]*/', $tokens[$index]['text'], $indent);
+                $width = strlen($indent[0]); $lineStart = true;
+                foreach ($parts as &$part) {
+                    if ($part['id'] !== T_ENCAPSED_AND_WHITESPACE) { $lineStart = false; continue; }
+                    $text = $part['text'];
+                    if ($width > 0) {
+                        $text = preg_replace('/(?<=\n)[ \t]{1,' . $width . '}/', '', $text);
+                        if ($lineStart) $text = preg_replace('/^[ \t]{1,' . $width . '}/', '', $text);
+                    }
+                    $part['text'] = $text; $lineStart = str_ends_with($text, "\n");
+                }
+                unset($part);
+                $last = array_key_last($parts);
+                if ($last !== null && $parts[$last]['id'] === T_ENCAPSED_AND_WHITESPACE) $parts[$last]['text'] = preg_replace('/\r?\n$/', '', $parts[$last]['text']);
+                $packed[] = $nowdoc
+                    ? [...$start, 'id' => 'constant', 'constant' => implode('', array_column($parts, 'text'))]
+                    : [...$start, 'id' => 'interpolated-string', 'text' => '[string]', 'parts' => $parts];
+                continue;
+            }
+            if ($tokens[$index]['id'] !== '"') { $packed[] = $tokens[$index]; continue; }
+            $start = $tokens[$index];
+            $parts = [];
+            for ($index++; $index < count($tokens) && $tokens[$index]['id'] !== '"'; $index++) $parts[] = $tokens[$index];
+            if ($index >= count($tokens)) throw new \InvalidArgumentException('Unclosed frontend string.');
+            $packed[] = [...$start, 'id' => 'interpolated-string', 'text' => '[string]', 'parts' => $parts];
+        }
+        return $packed;
+    }
+
+    private static function interpolatedString(array $tokens, int &$index, array $states, array $locals): mixed
+    {
+        $parts = $tokens[$index++]['parts'];
+        $result = '';
+        for ($part = 0; $part < count($parts);) {
+            $token = $parts[$part];
+            if ($token['id'] === T_ENCAPSED_AND_WHITESPACE) {
+                $value = self::decodeDoubleQuoted($token['text']);
+                $part++;
+            } elseif ($token['id'] === T_CURLY_OPEN) {
+                $part++;
+                $value = self::expression($parts, $part, $states, $locals, 0);
+                if (($parts[$part]['text'] ?? null) !== '}') throw new \InvalidArgumentException('Unsupported frontend string interpolation.');
+                $part++;
+            } elseif (in_array($token['id'], [T_VARIABLE, '(', 'constant'], true)) {
+                $value = self::operand($parts, $part, $states, $locals);
+            } else throw new \InvalidArgumentException('Frontend strings support $name and {$name} interpolation.');
+            $result = self::arithmetic('.', $result, $value);
+        }
+        return $result;
+    }
+
+    private static function decodeDoubleQuoted(string $value): string
+    {
+        return preg_replace_callback('/\\\\(u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)/s', static function (array $match): string {
+            $escape = $match[1];
+            $simple = ['n' => "\n", 'r' => "\r", 't' => "\t", 'v' => "\v", 'e' => "\e", 'f' => "\f", '\\' => '\\', '$' => '$', '"' => '"'];
+            if (isset($simple[$escape])) return $simple[$escape];
+            if ($escape[0] === 'x' && strlen($escape) > 1) return chr(hexdec(substr($escape, 1)));
+            if (ctype_digit($escape[0])) return chr(octdec($escape) & 255);
+            if (str_starts_with($escape, 'u{')) {
+                $code = hexdec(substr($escape, 2, -1));
+                if ($code > 0x10ffff || ($code >= 0xd800 && $code <= 0xdfff)) throw new \InvalidArgumentException('Invalid Unicode escape.');
+                if ($code < 0x80) return chr($code);
+                if ($code < 0x800) return chr(0xc0 | ($code >> 6)) . chr(0x80 | ($code & 63));
+                if ($code < 0x10000) return chr(0xe0 | ($code >> 12)) . chr(0x80 | (($code >> 6) & 63)) . chr(0x80 | ($code & 63));
+                return chr(0xf0 | ($code >> 18)) . chr(0x80 | (($code >> 12) & 63)) . chr(0x80 | (($code >> 6) & 63)) . chr(0x80 | ($code & 63));
+            }
+            return $match[0]; // PHP preserves unknown escapes, including \q.
+        }, $value);
+    }
+
+    /** Resolve values already declared by PHP, without calling application code. */
+    private static function resolveConstants(array $tokens, \ReflectionFunctionAbstract $function): array
+    {
+        $scope = $function instanceof \ReflectionMethod ? $function->getDeclaringClass() : $function->getClosureScopeClass();
+        $namespace = FrontendImports::namespaceForFunction($function);
+        $imports = FrontendImports::forFunction($function);
+        if (self::$evalSource !== null) { $namespace = self::$evalNamespace; $imports = self::$evalImports; }
+        $resolved = [];
+        for ($index = 0; $index < count($tokens); $index++) {
+            $token = $tokens[$index];
+            if ($token['id'] === T_CLASS && in_array($tokens[$index - 1]['id'] ?? null, [T_NEW, T_READONLY], true)) {
+                $depth = 0;
+                do {
+                    $part = $tokens[$index];
+                    if ($part['text'] === '(') $depth++;
+                    if ($part['text'] === ')') $depth--;
+                    if ($part['text'] === '{' && $depth === 0) break;
+                    $resolved[] = $part; $index++;
+                } while (isset($tokens[$index]));
+                [$body, $after] = self::delimited($tokens, $index, '{', '}');
+                array_push($resolved, ...[$tokens[$index], ...$body, $tokens[$after - 1]]); $index = $after - 1; continue;
+            }
+            try {
+            if (self::$evalSource !== null && $token['id'] === T_LINE) { $resolved[] = [...$token, 'id' => T_LNUMBER, 'text' => (string) $token['source']['line']]; continue; }
+            if (in_array($token['id'], [T_DIR, T_FILE], true)) self::fileOnlyError($token['text']);
+            if ($token['id'] === T_EXIT) self::consoleOnlyError($token['text']);
+            if (!in_array($token['id'], [T_STRING, T_STATIC, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE], true)
+                || in_array($tokens[$index - 1]['id'] ?? null, [T_OBJECT_OPERATOR, T_DOUBLE_COLON], true)) {
+                $resolved[] = $token; continue;
+            }
+            $name = $token['text'];
+            if (self::$objectScope !== null && str_starts_with(self::$objectScope, 'class@anonymous:') && in_array(strtolower($name), ['self', 'parent', 'static'], true) && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && in_array($tokens[$index + 2]['id'] ?? null, [T_CLASS, T_STRING], true) && ($tokens[$index + 3]['text'] ?? null) !== '(') {
+                $target = strtolower($name) === 'static' ? '@static' : self::exceptionName($name);
+                $resolved[] = [...$token, 'id' => 'constant', 'constant' => new StateExpression($tokens[$index + 2]['id'] === T_CLASS ? 'objectClass' : 'objectConstant', $target, $tokens[$index + 2]['text'])]; $index += 2; continue;
+            }
+            if (($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && ($tokens[$index + 2]['id'] ?? null) === T_VARIABLE) { $resolved[] = $token; continue; }
+            if (self::$objectScope !== null && strtolower($name) === 'static' && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && ($tokens[$index + 3]['text'] ?? null) !== '(' && in_array($tokens[$index + 2]['id'] ?? null, [T_CLASS, T_STRING], true)) {
+                $resolved[] = [...$token, 'id' => 'constant', 'constant' => new StateExpression(($tokens[$index + 2]['id'] === T_CLASS) ? 'objectClass' : 'objectConstant', '@static', $tokens[$index + 2]['text'])]; $index += 2; continue;
+            }
+            if (($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && ($tokens[$index + 2]['id'] ?? null) === T_CLASS) {
+                self::registerIntrospectionTarget(self::exceptionName($name));
+                $resolved[] = [...$token, 'id' => 'constant', 'constant' => self::exceptionName($name)]; $index += 2; continue;
+            }
+            if (self::$evalRuntimeCompile && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && ($tokens[$index + 2]['id'] ?? null) === T_STRING && ($tokens[$index + 3]['text'] ?? null) !== '(' && self::isObjectClassTarget($name)) {
+                $resolved[] = [...$token, 'id' => 'constant', 'constant' => new StateExpression('objectConstant', self::exceptionName($name), $tokens[$index + 2]['text'])]; $index += 2; continue;
+            }
+            if (self::$evalSource !== null && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && strtolower(ltrim($name, '\\')) !== 'roundingmode') { $resolved[]=$token;continue; }
+            if (($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON
+                && preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/', $tokens[$index + 2]['text'] ?? '')
+                && ($tokens[$index + 3]['text'] ?? null) !== '(') {
+                $className = FrontendImports::qualify($name, $namespace, $imports, 'class');
+                $class = match (strtolower($name)) {
+                    'self' => $scope,
+                    'static' => $function instanceof \ReflectionFunction ? $function->getClosureCalledClass() : $scope,
+                    'parent' => $scope?->getParentClass(),
+                    default => class_exists($className, false) || interface_exists($className, false) ? new \ReflectionClass($className) : null,
+                };
+                if (!$class instanceof \ReflectionClass) throw new \InvalidArgumentException("Unknown or unloaded frontend constant class: {$name}");
+                $constant = $class->getReflectionConstant($tokens[$index + 2]['text']);
+                if (!$constant || ($constant->isPrivate() && $constant->getDeclaringClass()->getName() !== $scope?->getName())
+                    || ($constant->isProtected() && $scope?->getName() !== $constant->getDeclaringClass()->getName() && !$scope?->isSubclassOf($constant->getDeclaringClass()->getName()))) {
+                    throw new \InvalidArgumentException('Unknown or inaccessible frontend class constant.');
+                }
+                $resolved[] = [...$token, 'id' => 'constant', 'text' => '[constant]', 'constant' => self::literalValue($constant->getValue())];
+                $index += 2; continue;
+            }
+            if (($tokens[$index + 1]['text'] ?? null) !== '(' && !in_array(strtolower($name), ['true', 'false', 'null'], true)) {
+                $qualified = FrontendImports::qualify($name, $namespace, $imports, 'const');
+                $candidate = defined($qualified) ? $qualified : ($token['id'] === T_STRING && !isset($imports['const'][$name]) && defined($name) ? $name : null);
+                if (in_array($candidate ?? ltrim($name, '\\'), ['STDIN', 'STDOUT', 'STDERR'], true)) self::consoleOnlyError($candidate ?? $name);
+                if (self::$evalRuntimeCompile) {
+                    $candidate = ltrim($name, '\\');
+                    if (array_key_exists($candidate, self::$evalRuntimeConstants)) $token = [...$token, 'id' => 'constant', 'text' => '[constant]', 'constant' => self::$evalRuntimeConstants[$candidate]];
+                } elseif ($candidate !== null) $token = [...$token, 'id' => 'constant', 'text' => '[constant]', 'constant' => self::literalValue(constant($candidate))];
+            }
+            $resolved[] = $token;
+            } catch (\Throwable $error) {
+                throw self::locatedError($error, $token['source'] ?? null);
+            }
+        }
+        return $resolved;
+    }
+
+    private static function sourceLocation(\ReflectionFunctionAbstract $function): array
+    {
+        if (self::$evalSource !== null) return self::$evalSource;
+        $file = $function->getFileName();
+        $source = $file === false ? '' : (string) file_get_contents($file);
+        $source = implode('', array_map(static fn ($token): string => is_array($token)
+            ? (in_array($token[0], [T_COMMENT, T_DOC_COMMENT, T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE], true) ? '' : $token[1]) : $token, token_get_all($source)));
+        $root = rtrim((string) getcwd(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $display = $file && str_starts_with($file, $root) ? substr($file, strlen($root)) : basename($file ?: '[unknown]');
+        return ['file' => $display, 'line' => $function->getStartLine(), 'phpVersion' => PHP_VERSION_ID,
+            ...((string) ini_get('arg_separator.output') !== '&' ? ['argSeparatorOutput' => (string) ini_get('arg_separator.output')] : []),
+            ...(extension_loaded('intl') ? ['intlLocale' => \Locale::getDefault()] : []),
+            'function' => str_contains($function->getName(), '{closure') ? '{closure}' : $function->getName(),
+            ...(function_exists('mb_internal_encoding') && !in_array(strtoupper(mb_internal_encoding()), ['UTF-8', 'UTF8'], true) ? ['mbEncoding' => mb_internal_encoding()] : []),
+            ...(function_exists('mb_substitute_character') && mb_substitute_character() !== 63 ? ['mbSubstitute' => mb_substitute_character()] : []),
+            ...(function_exists('bcscale') && bcscale() !== 0 ? ['bcScale' => bcscale()] : []),
+            ...((int) ini_get('precision') !== 14 ? ['precision' => (int) ini_get('precision')] : []),
+            ...((int) ini_get('serialize_precision') !== -1 ? ['serializePrecision' => (int) ini_get('serialize_precision')] : []),
+            'strictTypes' => preg_match('/\bdeclare\s*\([^)]*\bstrict_types\s*=\s*1(?=\s*[,\)])/', $source) === 1];
+    }
+
+    private static function located(ClientInstruction $action, ?array $source): ClientInstruction
+    {
+        return $source === null ? $action : new SourceInstruction($action, $source);
+    }
+
+    private static function locatedError(\Throwable $error, ?array $source): \Throwable
+    {
+        if ($source === null || str_contains($error->getMessage(), ' [PHP ')) return $error;
+        $class = $error::class;
+        return new $class($error->getMessage() . " [PHP {$source['file']}:{$source['line']}]", (int) $error->getCode(), $error);
+    }
+
     private static function stringLiteral(string $literal): string
     {
-        $quote = $literal[0] ?? '';
         $value = substr($literal, 1, -1);
-        if ($quote === "'") return str_replace(["\\\\", "\\'"], ["\\", "'"], $value);
-        if (str_contains($value, '$')) throw new \InvalidArgumentException('Interpolated PHP strings are not yet supported in frontend closures.');
-        return stripcslashes($value);
+        return $literal[0] === "'"
+            ? preg_replace_callback('/\\\\([\\\\\'])/', static fn (array $match): string => $match[1], $value)
+            : self::decodeDoubleQuoted($value);
     }
+
 }
 
-/** @internal Compile-time control signals for bounded frontend loops. */
-abstract class FrontendLoopControl extends \RuntimeException
+/** @internal A private local identifier and its optional compile-time value. */
+final readonly class FrontendLocal
 {
-    /** @var list<ClientInstruction> */
-    public array $actions = [];
-
-    /** @param list<ClientInstruction> $actions */
-    public function prepend(array $actions): void
-    {
-        if ($actions !== []) $this->actions = [...$actions, ...$this->actions];
-    }
+    public function __construct(public string $name, public mixed $known) {}
+    public function id(): string { return 'v' . bin2hex($this->name); }
+    public function reference(): array { return ['$local' => $this->id()]; }
 }
-
-/** @internal */
-final class FrontendLoopBreak extends FrontendLoopControl {}
-
-/** @internal */
-final class FrontendLoopContinue extends FrontendLoopControl {}

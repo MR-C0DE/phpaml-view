@@ -1,0 +1,10 @@
+{
+  "missing iterator methods": "return new class implements Iterator {};",
+  "missing aggregate method": "return new class implements IteratorAggregate {};",
+  "direct Traversable": "return new class implements Traversable {};",
+  "both traversal interfaces": "return new class implements Iterator,IteratorAggregate {public function rewind():void{} public function valid():bool{return false;} public function current():mixed{return null;} public function key():mixed{return null;} public function next():void{} public function getIterator():Traversable{return $this;} };",
+  "required factory parameter": "return new class implements IteratorAggregate { public function getIterator(int $n):Traversable {return $this;} };",
+  "nonpublic method": "return new class implements Iterator {public function rewind():void{} public function valid():bool{return false;} private function current():mixed{return null;} public function key():mixed{return null;} public function next():void{}};",
+  "static method": "return new class implements Iterator {public function rewind():void{} public function valid():bool{return false;} public function current():mixed{return null;} public function key():mixed{return null;} public static function next():void{}};",
+  "yield": "yield 1;"
+}

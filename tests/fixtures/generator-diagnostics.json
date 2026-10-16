@@ -1,0 +1,5 @@
+{
+  "topLevel": "yield 1;",
+  "wrongReturn": "$f = function (): int { yield 1; };",
+  "referenceDelegation": "$f=function &(){yield from [1];};"
+}

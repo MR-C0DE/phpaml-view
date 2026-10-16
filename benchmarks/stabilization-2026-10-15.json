@@ -1,0 +1,231 @@
+{
+  "date": "2026-10-15",
+  "environment": {
+    "php": "8.4.11",
+    "system": "Darwin",
+    "architecture": "arm64"
+  },
+  "method": "Three fresh processes per variant, alternating order. Each case: first render excluded, median of 10 repeated renders. Compare the original binding/import implementation to the optimized implementation, using the same current applications and source-capture fix. No browser suite running.",
+  "cases": {
+    "tasks": {
+      "before_ms": 80.445,
+      "after_ms": 4.911,
+      "reduction_percent": 93.9,
+      "identical_html": true,
+      "html_bytes": 13965
+    },
+    "reservation": {
+      "before_ms": 20.604,
+      "after_ms": 14.621,
+      "reduction_percent": 29.0,
+      "identical_html": true,
+      "html_bytes": 135083
+    },
+    "catalogue": {
+      "before_ms": 19.366,
+      "after_ms": 16.265,
+      "reduction_percent": 16.0,
+      "identical_html": true,
+      "html_bytes": 192731
+    },
+    "100_text_bindings": {
+      "before_ms": 24.523,
+      "after_ms": 17.321,
+      "reduction_percent": 29.4,
+      "identical_html": true,
+      "html_bytes": 5682
+    }
+  },
+  "runs": {
+    "before": [
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 118.443,
+            "median_ms": 80.504,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 22.243,
+            "median_ms": 20.684,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 21.166,
+            "median_ms": 19.205,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 24.975,
+            "median_ms": 24.523,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 10485760
+      },
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 90.133,
+            "median_ms": 80.439,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 20.971,
+            "median_ms": 20.604,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 19.546,
+            "median_ms": 19.366,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 25.074,
+            "median_ms": 24.597,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 10485760
+      },
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 91.448,
+            "median_ms": 80.445,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 20.976,
+            "median_ms": 20.44,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 19.668,
+            "median_ms": 19.378,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 24.515,
+            "median_ms": 24.275,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 10485760
+      }
+    ],
+    "after": [
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 15.125,
+            "median_ms": 4.904,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 15.465,
+            "median_ms": 14.582,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 16.817,
+            "median_ms": 16.265,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 17.668,
+            "median_ms": 17.236,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 8388608
+      },
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 15.501,
+            "median_ms": 4.955,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 15.657,
+            "median_ms": 14.673,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 16.741,
+            "median_ms": 16.011,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 17.654,
+            "median_ms": 17.321,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 8388608
+      },
+      {
+        "php": "8.4.11",
+        "iterations": 11,
+        "cases": {
+          "tasks": {
+            "first_ms": 15.841,
+            "median_ms": 4.911,
+            "html_bytes": 13965,
+            "html_sha256": "c248703935596ad7a832aadffab20e73dac9f310247549328018f41442cdb1ed"
+          },
+          "reservation": {
+            "first_ms": 20.983,
+            "median_ms": 14.621,
+            "html_bytes": 135083,
+            "html_sha256": "c657069294b8feb905518bc4b13e03f9fe30941b71743dec9713d678a43d39a2"
+          },
+          "catalogue": {
+            "first_ms": 16.834,
+            "median_ms": 16.353,
+            "html_bytes": 192731,
+            "html_sha256": "e1be55dbd8407a7a745762796b95011b5f02f9d26b4f194d336e887ce1dd375d"
+          },
+          "100_text_bindings": {
+            "first_ms": 18.15,
+            "median_ms": 17.329,
+            "html_bytes": 5682,
+            "html_sha256": "13299bb59a09796508c3419f004ad1153bd42550a15d2d035bbf3e05190f7f38"
+          }
+        },
+        "peak_memory_bytes": 8388608
+      }
+    ]
+  }
+}

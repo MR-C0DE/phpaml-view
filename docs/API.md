@@ -408,8 +408,49 @@ Menus and popovers close on outside click or Escape. Menu items support arrow ke
 - `Form(...)->preserve('draft-key')` restores non-file values after navigation or a server error.
 
 Call `AMLEngine.clearFormDraft('draft-key')` after confirmed server success.
-Browser `accept` filters are only hints: applications must validate file size,
-extension, MIME type, and content on the server.
+Browser `accept` filters are only hints: applications uploading files must validate
+size, extension, MIME type, and content again on the server.
+
+### Local browser files
+
+`AML\Engine\BrowserFiles` provides `readText(?string $input = null)`,
+`readJson(?string $input = null)` and `readCsv(?string $input = null, string $separator = ',')`.
+Use `->storeIn('state')->errorIn('error')->loadingIn('loading')` and attach the
+action directly to a file input's `onChange` or a button's `onClick`. A null input
+means the triggering file input; a named input is scoped to its component.
+
+`downloadText($value, $filename = 'document.txt')`,
+`downloadJson($value, $filename = 'data.json')` and
+`downloadCsv($rows, $filename = 'data.csv', $separator = ',')` download current
+`StateRef` / expression values or literal data. They do not overwrite the source.
+Options: `maxBytes(1048576)` (maximum 16 MiB), `fileAt(0)` for reads,
+`pretty(false)` for compact JSON, `spreadsheetSafe(false)` for raw CSV.
+CSV defaults to formula-safe export and imports lists of string cells.
+
+These actions use the browser File API without HTTP requests, validate UTF-8 and
+data limits, cancel superseded reads and reads on unmount, and emit
+`aml:file-success` / `aml:file-error`. Compose them with `Actions::sequence`;
+explicit state transactions reject file actions. State types are enforced and
+failed imports preserve previous data. See [the level 9 guide](fr/niveau-9-fichiers-donnees.md).
+
+## Frontend exceptions
+
+Compiled event handlers and synchronous service functions support
+`try/catch/finally`, multiple/union catches, `throw` statements and expressions,
+Throwable parameter/return types and assertions. Catch matching follows PHP
+class inheritance; `Throwable` covers both `Exception` and `Error`.
+Custom exceptions must be loaded and inherit standard constructors, methods
+and properties unchanged. Throwable objects remain local; State accepts their
+message/code or trace data, not the objects themselves.
+
+Caught errors retain earlier State changes; an uncaught synchronous event error
+rolls back its State changes. Console output is not rolled back. PHP service
+locations, compiled call frames and previous causes appear in the development
+overlay when `aml-debug=true`; production disables the overlay without removing
+diagnostic metadata. `echo` and `Console` remain browser-console output.
+Assertions use the PHP compiler process's `zend.assertions` configuration,
+independently of the overlay. See [the level 10 guide](fr/niveau-10-erreurs-exceptions.md)
+and [the example](../examples/niveau-10/page.php).
 
 ## Declarative factories
 
@@ -445,3 +486,78 @@ ViewTest::render(new CounterPage())
 test runtime is self-contained and does not require a browser, server, DOM
 extension, or JavaScript. It simulates deterministic local actions; explicit
 API requests and full browser behavior remain integration-test concerns.
+
+## Native PHP function catalogue
+
+Events and pure reactive text share the supported Math/String/Array catalogue,
+including scalar callback helpers, references and first-class native callables.
+See [the generated native catalogue](fr/compatibilite.md#catalogue-natif)
+and [per-family boundaries](fr/fonctions-natives.md).
+
+This includes 28 UTF-8 `mb_*` functions; see [Unicode support](fr/unicode.md)
+for encoding, PHP version and code-point boundaries.
+
+The catalogue also includes all 14 procedural BCMath functions. See
+[exact decimal calculations](fr/bcmath.md) for RoundingMode, scale isolation and limits.
+
+`eval()` is supported in compiled events and synchronous services. Static text is
+compiled by View; dynamic text requires Engine’s optional same-origin parser asset.
+See [scope, language limits and deployment](fr/eval.md). Reactive display rejects eval.
+
+## Local service objects
+
+Compiled events can instantiate loaded user classes and call their methods, including inheritance, visibility and typed properties. Engine owns these local instances; they cannot enter State. See the [object guide](fr/objets.md) for the supported syntax, eval integration and remaining PHP object limitations.
+
+
+### Static service properties
+
+Service classes support `Class::$field`, `self::$field`, `parent::$field` and
+`static::$field`, including typed/visible fields, inherited or redeclared storage,
+reference parameters, array offsets and compiled-class eval. Each component
+instance retains its own static storage across handlers and effects. Engine
+unmount, dynamic item/conditional recreation and page reload reset it to declared
+PHP defaults. Current server static values are never captured. Static side effects
+survive event errors even when State changes roll back. Static properties are not
+reactive State and require an event to copy their result into State. See the
+[service object guide](fr/objets.md) for limits and examples.
+
+
+### Magic service methods
+
+Compiled services support `__get`, `__set`, `__isset`, `__unset`, `__call`,
+`__callStatic`, `__invoke`, `__toString`, `__clone` and `__debugInfo`. Implicit calls use ordinary
+function contracts, source diagnostics and call budgets. Virtual array properties
+returned by value warn on indirect writes instead of silently persisting them.
+`Stringable` is accepted as a contract; strict string parameters still reject
+objects. Clone hooks run on the copied object and respect visibility and PHP
+version-specific readonly reinitialization. Reference returns from `__get` and
+`offsetGet` follow the [reference contract](fr/spl-references.md).
+PHP `serialize`/`unserialize` hooks are supported for compiled service objects;
+destructors remain unsupported. See [the exact adapter scope](fr/extensions-langage.md).
+`JsonSerializable` uses the [JSON adapter](fr/json-regex-dates.md#json). See the
+[magic methods guide](fr/methodes-magiques.md).
+
+### Anonymous classes and intersection types
+
+`new class(...)` uses the ordinary service catalogue without server instantiation. Constructors, promoted/readonly properties, methods, inheritance and interfaces use the same runtime checks. `A&B` requires every member; `(A&B)|C` preserves union alternatives. Each eval invocation creates fresh anonymous types. Static fields remain component-scoped. See the [guide and limits](fr/classes-anonymes-intersections.md).
+
+### Object introspection
+
+Object introspection includes `is_object`, `get_class`, `get_parent_class`, `get_called_class`, `class_exists`, `interface_exists`, `method_exists`, `property_exists`, `is_a`, `is_subclass_of`, `get_object_vars` and `get_class_methods`. Member introspection runs in events; the pure `is_object` predicate also supports reactive text. They inspect the compiled service catalogue without autoload, preserve visibility and support named/spread arguments and callbacks. `var_dump()` calls `__debugInfo()` and sends its result only to the console. Hook errors are catchable and use ordinary event rollback, unlike native PHP process termination. See [contracts and limits](fr/introspection.md).
+
+### Validation, dates and JSON services
+
+The [callable and validation guide](fr/utilitaires.md) describes `is_callable`,
+`function_exists`, `call_user_func*` and the supported `filter_var` inputs.
+The [date guide](fr/dates-avancees.md) covers format-based parsing, diagnostics,
+calendar intervals, differences and periods. [JsonSerializable](fr/json-regex-dates.md#json)
+hooks execute as compiled methods. The [reservation example](fr/reservation.md)
+combines these adapters and displays scalar results through State.
+
+### URL, Unicode display and dynamic classes
+
+See the [exact scope and examples](fr/web-unicode-dynamique.md) for URL/Base64
+helpers, `filter_var_array`, grapheme functions, `Normalizer`, the `NumberFormatter`
+adapter, dynamic `new`/static targets and nullsafe receiver chains. The number
+formatter runs in events; pure grapheme and normalization functions also support
+reactive text. PHP rendering requires ext-intl for these Unicode adapters.

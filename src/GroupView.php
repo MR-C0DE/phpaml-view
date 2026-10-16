@@ -14,6 +14,7 @@ final class GroupView implements View
 
     public function __construct(View ...$children)
     {
+        NaturalStateBindings::captureChildren($children);
         $this->children = $children;
     }
 

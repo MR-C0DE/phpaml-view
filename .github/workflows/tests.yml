@@ -2,7 +2,14 @@ name: Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: Matching Engine revision for candidate verification
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -18,6 +25,63 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          extensions: mbstring, bcmath, intl
       - run: composer validate --strict
+      - uses: actions/checkout@v5
+        if: inputs.engine_ref != ''
+        with:
+          repository: MR-C0DE/phpaml-engine
+          ref: ${{ inputs.engine_ref }}
+          path: .ci/phpaml-engine
+      - name: Select the candidate Engine dependency
+        if: inputs.engine_ref != ''
+        run: |
+          php -r '$p=json_decode(file_get_contents("composer.json"),true); $e=json_decode(file_get_contents(".ci/phpaml-engine/composer.json"),true); $p["repositories"][]=["type"=>"path","url"=>".ci/phpaml-engine","options"=>["versions"=>["phpaml/engine"=>$e["extra"]["phpaml"]["version"]]]]; file_put_contents("composer.json",json_encode($p,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
       - run: composer install --no-interaction --prefer-dist
+      - run: composer docs:check
       - run: composer test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: composer test:language-runtime
+
+  frontend-packages:
+    name: Installed frontend applications (${{ matrix.runtime }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [full, modules]
+    defaults:
+      run:
+        working-directory: phpaml-engine
+    env:
+      PHPAML_BROWSER_RUNTIME: ${{ matrix.runtime }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: phpaml-view
+      - uses: actions/checkout@v5
+        with:
+          repository: MR-C0DE/phpaml-engine
+          ref: ${{ inputs.engine_ref || vars.PHPAML_ENGINE_TEST_REF || 'main' }}
+          path: phpaml-engine
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, bcmath, intl, zip
+          tools: composer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build:check
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run test:packages
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: view-distributions-${{ matrix.runtime }}
+          path: phpaml-engine/test-results/
+          retention-days: 7

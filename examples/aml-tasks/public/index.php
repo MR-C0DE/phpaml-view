@@ -9,12 +9,27 @@ use AML\View\FileApplication;
 use App\Support\Copy;
 
 $path = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+$assetRequest = parse_url($path, PHP_URL_PATH) ?: '/';
+$asset = str_starts_with($assetRequest, '/_aml/') ? EngineRuntime::publicAssetPath(substr($assetRequest, 6)) : null;
+if ($asset !== null) {
+    $etag = '"' . hash_file('sha256', $asset) . '"';
+    header('Content-Type: ' . (str_ends_with($asset, '.map') ? 'application/json' : 'text/javascript; charset=utf-8'));
+    header('Cache-Control: public, no-cache');
+    header('ETag: ' . $etag);
+    if (($_SERVER['HTTP_IF_NONE_MATCH'] ?? '') === $etag) http_response_code(304);
+    else readfile($asset);
+    exit;
+}
 $requestedLocale = $_GET['lang'] ?? null;
 $locale = is_string($requestedLocale) && in_array($requestedLocale, ['en', 'fr'], true)
     ? $requestedLocale
     : (string) ($_COOKIE['aml_tasks_locale'] ?? 'en');
 $locale = in_array($locale, ['en', 'fr'], true) ? $locale : 'en';
-if ($requestedLocale !== null) setcookie('aml_tasks_locale', $locale, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax']);
+// Loading/error previews may finish after the destination page. They must not
+// overwrite the preference chosen by that navigation.
+if ($requestedLocale !== null && !isset($_SERVER['HTTP_X_AML_NAVIGATION_STATE'])) {
+    setcookie('aml_tasks_locale', $locale, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax']);
+}
 Copy::locale($locale);
 $app = new FileApplication(dirname(__DIR__) . '/src/views');
 
@@ -49,6 +64,6 @@ try {
 </head>
 <body>
 <?= $content ?>
-<?= EngineRuntime::script() ?>
+<?= EngineRuntime::externalScript(modular: true) ?>
 </body>
 </html>

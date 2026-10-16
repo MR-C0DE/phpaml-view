@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Views\Pages\Tasks;
 
 use App\Support\Copy;
-use AML\Engine\Actions;
-use AML\Engine\ClientAction;
 use AML\Engine\StateRef;
 use AML\View\CollectionItem;
 use AML\View\Computed;
@@ -44,12 +42,18 @@ final class TasksPage extends Page
             )->class('page-heading'),
             Form(
                 Input('newTask')->bindClient('newTask')->required(Copy::text('tasks.required'))->minLength(2)->attribute('placeholder', Copy::text('tasks.required')),
-                Button(Copy::text('tasks.add'))->onClick(Actions::sequence(
-                    ClientAction::append('tasks', ['id' => StateRef::to('newTask'), 'title' => StateRef::to('newTask'), 'done' => false]),
-                    ClientAction::set('newTask', ''),
-                    ClientAction::set('saved', true),
-                ))->class('button', 'button-primary'),
-            )->class('task-composer'),
+                Button(Copy::text('tasks.add'))->submit()->class('button', 'button-primary'),
+            )->onSubmit(function (): void {
+                $title = trim($this->newTask);
+                if (strlen($title) < 2) return;
+                $id = 1;
+                foreach ($this->tasks as $task) {
+                    if (is_int($task['id']) && $task['id'] >= $id) $id = $task['id'] + 1;
+                }
+                $this->tasks[] = ['id' => $id, 'title' => $title, 'done' => false];
+                $this->newTask = '';
+                $this->saved = true;
+            })->class('task-composer'),
             Element('div',
                 Text('● ' . (Copy::current() === 'fr' ? 'État local actif' : 'Local state active')),
                 Text('↻ ' . (Copy::current() === 'fr' ? 'Sauvegarde automatique' : 'Automatic persistence')),

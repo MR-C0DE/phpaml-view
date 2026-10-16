@@ -226,7 +226,7 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.12', 'AML View version is inconsistent.');
+    expect(AMLView::VERSION === '0.1.0-beta.13', 'AML View version is inconsistent.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',
@@ -663,8 +663,8 @@ check('Text interpolates reactive state without losing its initial HTML value', 
     };
 
     $html = $renderer->render($page);
-    expect(str_contains($html, 'Count: ') && str_contains($html, 'data-aml-bind="count">2</span>'), 'The interpolated scalar state is missing.');
-    expect(str_contains($html, 'data-aml-bind="profile.name">&lt;André&gt;</span>'), 'The interpolated nested state is missing or unsafe.');
+    expect(str_contains($html, 'Count: 2; user: &lt;André&gt;') && str_contains($html, '&quot;$state&quot;:&quot;count&quot;'), 'The interpolated scalar state is missing.');
+    expect(str_contains($html, '&quot;$state&quot;:&quot;profile.name&quot;') && !str_contains($html, '<André>'), 'The interpolated nested state is missing or unsafe.');
     expect(str_contains($html, 'Literal braces: {count}'), 'Escaped interpolation braces changed unexpectedly.');
 });
 
@@ -901,11 +901,11 @@ check('Request composes success error and final frontend actions', function () u
     };
 
     $html = $renderer->render($page);
-    expect(str_contains($html, '&quot;onSuccess&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request success action is missing.');
+    expect(preg_match('/"onSuccess":\{.*?"type":"set"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request success action is missing.');
     expect(str_contains($html, '&quot;value&quot;:&quot;saved&quot;'), 'Request success value is missing.');
-    expect(str_contains($html, '&quot;onError&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request error action is missing.');
+    expect(preg_match('/"onError":\{.*?"type":"set"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request error action is missing.');
     expect(str_contains($html, '&quot;value&quot;:&quot;failed&quot;'), 'Request error value is missing.');
-    expect(str_contains($html, '&quot;onFinally&quot;:{&quot;type&quot;:&quot;console&quot;'), 'Request final action is missing.');
+    expect(preg_match('/"onFinally":\{.*?"type":"console"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request final action is missing.');
 });
 
 check('Request supports promise-style lifecycle aliases', function () use ($renderer): void {
@@ -924,11 +924,11 @@ check('Request supports promise-style lifecycle aliases', function () use ($rend
     };
 
     $html = $renderer->render($page);
-    expect(str_contains($html, '&quot;onSuccess&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request then() action is missing.');
+    expect(preg_match('/"onSuccess":\{.*?"type":"set"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request then() action is missing.');
     expect(str_contains($html, '&quot;value&quot;:&quot;loaded&quot;'), 'Request then() value is missing.');
-    expect(str_contains($html, '&quot;onError&quot;:{&quot;type&quot;:&quot;set&quot;'), 'Request catch() action is missing.');
+    expect(preg_match('/"onError":\{.*?"type":"set"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request catch() action is missing.');
     expect(str_contains($html, '&quot;value&quot;:&quot;failed&quot;'), 'Request catch() value is missing.');
-    expect(str_contains($html, '&quot;onFinally&quot;:{&quot;type&quot;:&quot;console&quot;'), 'Request finally() action is missing.');
+    expect(preg_match('/"onFinally":\{.*?"type":"console"/', html_entity_decode($html, ENT_QUOTES)) === 1, 'Request finally() action is missing.');
 });
 
 check('FormState exposes complete isolated form lifecycle state', function () use ($renderer): void {
@@ -1026,7 +1026,7 @@ check('Frontend closures reject non-state PHP execution', function () use ($rend
         $renderer->render($page);
         throw new RuntimeException('Arbitrary PHP execution was accepted in a frontend closure.');
     } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), '#[State]'), 'The unsafe closure error is not actionable.');
+        expect(str_contains($error->getMessage(), 'BrowserFiles') && str_contains($error->getMessage(), 'file_put_contents'), 'The unsafe closure error is not actionable.');
     }
     expect(!is_file('/tmp/phpaml-unsafe'), 'The rejected frontend closure executed PHP.');
 });
@@ -1209,7 +1209,7 @@ check('Named component methods compile as reusable frontend handlers', function 
         ->click('Named double')->assertState('count', 4);
 });
 
-check('Frontend closures inline local methods with arguments', function (): void {
+check('Frontend closures call local methods with arguments', function (): void {
     $component = new class extends Page {
         #[State] public string $text = '';
 
@@ -1233,7 +1233,7 @@ check('Frontend closures inline local methods with arguments', function (): void
         ->click('Append eight')->assertState('text', '78')->assertSee('78');
 });
 
-check('Frontend closures inline local static methods with arguments', function (): void {
+check('Frontend closures call local static methods with arguments', function (): void {
     $component = new class extends Component {
         #[State]
         private int $counter = 0;
@@ -1255,8 +1255,9 @@ check('Frontend closures inline local static methods with arguments', function (
     $html = (new Renderer())->render($component);
     $decoded = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     expect(str_contains($decoded, 'Static amount'), 'A local static frontend method was not inlined.');
-    expect(str_contains($decoded, '"values":["Static amount",2]'), 'A static frontend method argument was not compiled.');
-    expect(str_contains($decoded, '"values":["Static amount",3]'), 'A late-static frontend method argument was not compiled.');
+    $test = new \AML\View\Testing\TestView($html);
+    $test->click('Self')->click('Static');
+    expect($test->consoleOutput() === [['Static amount', 2], ['Static amount', 3]], 'Static frontend arguments were not passed correctly.');
 });
 
 check('Frontend static calls cannot target instance methods', function (): void {
@@ -1277,11 +1278,11 @@ check('Frontend static calls cannot target instance methods', function (): void 
         (new Renderer())->render($component);
         throw new RuntimeException('A static call to an instance frontend method was accepted.');
     } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), 'Unsupported local frontend method'), 'The static/instance mismatch error is not actionable.');
+        expect(str_contains($error->getMessage(), 'Inaccessible or unsupported frontend method'), 'The static/instance mismatch error is not actionable.');
     }
 });
 
-check('Frontend local methods reject recursive calls', function () use ($renderer): void {
+check('Frontend local methods bound recursive calls at runtime', function () use ($renderer): void {
     $component = new class extends Page {
         #[State] public int $count = 0;
 
@@ -1297,10 +1298,10 @@ check('Frontend local methods reject recursive calls', function () use ($rendere
     };
 
     try {
-        $renderer->render($component);
-        throw new RuntimeException('A recursive frontend method was accepted.');
-    } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), 'Recursive'), 'The recursive method error is not actionable.');
+        ViewTest::render($component)->click('Recurse');
+        throw new RuntimeException('An unbounded recursive frontend method was accepted.');
+    } catch (RangeException $error) {
+        expect(str_contains($error->getMessage(), 'call limit'), 'The recursive method error is not actionable.');
     }
 });
 
@@ -1330,7 +1331,7 @@ check('Named frontend handlers reject arbitrary PHP execution', function () use 
         $renderer->render($component);
         throw new RuntimeException('An unsafe named frontend handler was accepted.');
     } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), '#[State]'), 'The unsafe named-handler error is not actionable.');
+        expect(str_contains($error->getMessage(), 'BrowserFiles') && str_contains($error->getMessage(), 'file_put_contents'), 'The unsafe named-handler error is not actionable.');
     }
     expect(!is_file('/tmp/phpaml-unsafe-method'), 'The rejected named handler executed PHP.');
 });
@@ -1438,7 +1439,7 @@ check('Frontend closures compile bounded PHP for while and do while loops', func
     };
 
     $html = $renderer->render($page);
-    expect(substr_count($html, '&quot;type&quot;:&quot;increment&quot;') === 7, 'PHP frontend loops did not expand to the expected actions.');
+    (new \AML\View\Testing\TestView($html))->click('For')->assertState('count', 3)->click('While')->assertState('count', 5)->click('Do while')->assertState('count', 7);
 });
 
 check('Frontend bounded loops support native break and continue', function () use ($renderer): void {
@@ -1490,7 +1491,7 @@ check('Frontend bounded loops support native break and continue', function () us
     };
 
     $html = $renderer->render($page);
-    expect(substr_count($html, '&quot;type&quot;:&quot;increment&quot;') === 7, 'break or continue produced the wrong number of bounded-loop actions.');
+    (new \AML\View\Testing\TestView($html))->click('For control')->assertState('count', 3)->click('While control')->assertState('count', 5)->click('Do control')->assertState('count', 7);
 });
 
 check('Frontend closures compile reactive PHP foreach loops with keys and nested values', function () use ($renderer): void {
@@ -1522,13 +1523,7 @@ check('Frontend closures compile reactive PHP foreach loops with keys and nested
     };
 
     $html = $renderer->render($page);
-    expect(str_contains($html, '&quot;type&quot;:&quot;foreach&quot;'), 'Reactive foreach action is missing.');
-    expect(str_contains($html, '&quot;source&quot;:&quot;users&quot;'), 'Reactive foreach source is missing.');
-    expect(str_contains($html, '&quot;$loop&quot;:&quot;user.score&quot;'), 'Nested foreach value is missing.');
-    expect(str_contains($html, '&quot;$loop&quot;:&quot;index&quot;'), 'Foreach key is missing.');
-    expect(str_contains($html, '&quot;$loop&quot;:&quot;user.name&quot;'), 'Nested appended foreach value is missing.');
-    expect(str_contains($html, '&quot;operation&quot;:&quot;continue&quot;'), 'Foreach continue signal is missing.');
-    expect(str_contains($html, '&quot;operation&quot;:&quot;break&quot;'), 'Foreach break signal is missing.');
+    (new \AML\View\Testing\TestView($html))->click('Summarize')->assertState('total', 3)->assertState('lastIndex', 1)->assertState('names', ['Marie']);
 });
 
 check('Frontend closures compile nested reactive foreach loops', function () use ($renderer): void {
@@ -1562,13 +1557,10 @@ check('Frontend closures compile nested reactive foreach loops', function () use
     };
 
     $html = $renderer->render($page);
-    expect(substr_count($html, '&quot;type&quot;:&quot;foreach&quot;') === 2, 'Nested foreach actions are missing.');
-    expect(str_contains($html, '&quot;source&quot;:{&quot;$loop&quot;:&quot;category.products&quot;}'), 'Nested foreach source does not reference its parent loop.');
-    expect(str_contains($html, '&quot;$loop&quot;:&quot;category.name&quot;'), 'Outer loop value is unavailable inside the nested loop.');
-    expect(str_contains($html, '&quot;$loop&quot;:&quot;product.price&quot;'), 'Inner loop value is unavailable inside its actions.');
+    (new \AML\View\Testing\TestView($html))->click('Calculate')->assertState('total', 80)->assertState('selected', ['Hardware: Keyboard']);
 });
 
-check('Frontend loops reject state-driven and excessive iteration counts', function () use ($renderer): void {
+check('Frontend loops execute current state and stop excessive iteration counts', function () use ($renderer): void {
     $stateDriven = new class extends Page {
         #[State] public int $count = 0;
         public function body(): View
@@ -1580,29 +1572,26 @@ check('Frontend loops reject state-driven and excessive iteration counts', funct
             });
         }
     };
-    try {
-        $renderer->render($stateDriven);
-        throw new RuntimeException('A state-driven frontend loop was accepted.');
-    } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), 'local values'), 'State-driven loop rejection was unclear.');
-    }
+    (new \AML\View\Testing\TestView($renderer->render($stateDriven)))->click('Unsafe')->assertState('count', 3);
 
     $excessive = new class extends Page {
         #[State] public int $count = 0;
         public function body(): View
         {
             return Button('Unsafe')->onClick(function (): void {
-                for ($i = 0; $i < 101; $i++) {
+                for ($i = 0; $i < 1001; $i++) {
                     $this->count++;
                 }
             });
         }
     };
+    $test = new \AML\View\Testing\TestView($renderer->render($excessive));
     try {
-        $renderer->render($excessive);
-        throw new RuntimeException('An excessive frontend loop was accepted.');
-    } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), 'safe limit'), 'Loop limit rejection was unclear.');
+        $test->click('Unsafe');
+        throw new RuntimeException('An excessive frontend loop was not interrupted.');
+    } catch (RangeException $error) {
+        expect(str_contains($error->getMessage(), 'safe iteration limit'), 'Loop limit rejection was unclear.');
+        $test->assertState('count', 0);
     }
 });
 
@@ -1629,8 +1618,8 @@ check('Frontend closures compile safe PHP collection functions', function () use
     };
 
     $html = $renderer->render($page);
-    foreach (['count', 'sum', 'contains'] as $operation) {
-        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing {$operation} collection expression.");
+    foreach (['count', 'array_sum', 'in_array'] as $operation) {
+        expect(str_contains($html, '&quot;left&quot;:&quot;' . $operation . '&quot;'), "Missing {$operation} collection expression.");
     }
     expect(str_contains($html, '&quot;type&quot;:&quot;condition&quot;'), 'in_array() condition was not compiled.');
 });
@@ -1667,12 +1656,10 @@ check('Frontend closures compile filter map and reduce arrow callbacks', functio
     };
 
     $html = $renderer->render($page);
-    foreach (['filter', 'map', 'reduce'] as $operation) {
-        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    foreach (['array_filter', 'array_map', 'array_reduce'] as $operation) {
+        expect(str_contains($html, '&quot;left&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
     }
-    expect(str_contains($html, '&quot;$collection&quot;:&quot;user.active&quot;'), 'Filter callback value is missing.');
-    expect(str_contains($html, '&quot;$collection&quot;:&quot;user.name&quot;'), 'Map callback value is missing.');
-    expect(str_contains($html, '&quot;$collection&quot;:&quot;sum&quot;'), 'Reduce accumulator is missing.');
+    (new \AML\View\Testing\TestView($html))->click('Transform')->assertState('names', ['André'])->assertState('total', 10);
 });
 
 check('Frontend closures compile find any all column and unique operations', function () use ($renderer): void {
@@ -1701,8 +1688,8 @@ check('Frontend closures compile find any all column and unique operations', fun
     };
 
     $html = $renderer->render($page);
-    foreach (['find', 'any', 'all', 'column', 'unique'] as $operation) {
-        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    foreach (['array_find', 'array_any', 'array_all', 'array_column', 'array_unique'] as $operation) {
+        expect(str_contains($html, '&quot;left&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
     }
 });
 
@@ -1721,9 +1708,7 @@ check('Frontend closures compile native sort and usort state mutations', functio
     };
 
     $html = $renderer->render($page);
-    foreach (['sort', 'sortBy', 'compare'] as $operation) {
-        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
-    }
+    (new \AML\View\Testing\TestView($html))->click('Sort')->assertState('numbers', [1, 2, 10])->assertState('users', [['name' => 'André'], ['name' => 'Marie']]);
 });
 
 check('Frontend closures update and remove nested state collection values', function () use ($renderer): void {
@@ -1745,10 +1730,7 @@ check('Frontend closures update and remove nested state collection values', func
     };
 
     $html = $renderer->render($page);
-    expect(str_contains($html, '&quot;target&quot;:&quot;users.0.name&quot;'), 'Nested string assignment was not compiled.');
-    expect(str_contains($html, '&quot;target&quot;:&quot;users.1.score&quot;'), 'Nested numeric increment was not compiled.');
-    expect(str_contains($html, '&quot;type&quot;:&quot;remove-path&quot;'), 'Nested unset was not compiled.');
-    expect(str_contains($html, '&quot;target&quot;:&quot;users.2&quot;'), 'Nested unset target was not preserved.');
+    (new \AML\View\Testing\TestView($html))->click('Update')->assertState('users', [['name' => 'André', 'score' => 1], ['name' => 'Alex', 'score' => 3]]);
 });
 
 check('Frontend closures read nested state collection values naturally', function () use ($renderer): void {
@@ -1774,10 +1756,7 @@ check('Frontend closures read nested state collection values naturally', functio
     };
 
     $html = $renderer->render($page);
-    foreach (['users.0.name', 'users.0.score', 'users.1.score'] as $path) {
-        expect(str_contains($html, '&quot;$state&quot;:&quot;' . $path . '&quot;'), "Missing nested frontend state read: {$path}");
-    }
-    expect(str_contains($html, '&quot;state&quot;:&quot;users.0.active&quot;'), 'Nested frontend condition state is missing.');
+    (new \AML\View\Testing\TestView($html))->click('Read')->assertState('selectedName', 'André')->assertState('total', 5)->assertState('status', 'active');
 });
 
 check('Frontend closures compile reverse slice and merge collection expressions', function () use ($renderer): void {
@@ -1800,8 +1779,8 @@ check('Frontend closures compile reverse slice and merge collection expressions'
     };
 
     $html = $renderer->render($page);
-    foreach (['reverse', 'slice', 'merge'] as $operation) {
-        expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
+    foreach (['array_reverse', 'array_slice', 'array_merge'] as $operation) {
+        expect(str_contains($html, '&quot;left&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
     }
 });
 
@@ -1833,9 +1812,11 @@ check('Frontend closures compile PHP search checks math bounds and casts', funct
     };
 
     $html = $renderer->render($page);
-    foreach (['search', 'keyExists', 'isset', 'ceil', 'min', 'max', 'toInt'] as $operation) {
+    foreach (['isset', 'builtin', 'toInt'] as $operation) {
         expect(str_contains($html, '&quot;operation&quot;:&quot;' . $operation . '&quot;'), "Missing frontend {$operation} expression.");
     }
+    expect(str_contains($html, '&quot;left&quot;:&quot;ceil&quot;'), 'Missing typed frontend ceil() call.');
+    foreach (['array_search', 'array_key_exists', 'min', 'max'] as $name) expect(str_contains($html, '&quot;left&quot;:&quot;' . $name . '&quot;'), "Missing native {$name}() call.");
 });
 
 check('Frontend conditions support native PHP boolean composition', function () use ($renderer): void {
@@ -1868,7 +1849,7 @@ check('Frontend conditions support native PHP boolean composition', function () 
     expect(str_contains($html, '&quot;state&quot;:&quot;count&quot;'), 'Numeric comparison in a composed condition is missing.');
 });
 
-check('Frontend in_array requires strict comparison', function () use ($renderer): void {
+check('Frontend in_array supports PHP loose comparison', function () use ($renderer): void {
     $page = new class extends Page {
         #[State] public array $numbers = [1];
         #[State] public bool $found = false;
@@ -1879,12 +1860,7 @@ check('Frontend in_array requires strict comparison', function () use ($renderer
             });
         }
     };
-    try {
-        $renderer->render($page);
-        throw new RuntimeException('Non-strict frontend in_array() was accepted.');
-    } catch (InvalidArgumentException $error) {
-        expect(str_contains($error->getMessage(), 'strict comparison'), 'in_array() rejection was unclear.');
-    }
+    (new \AML\View\Testing\TestView($renderer->render($page)))->click('Unsafe')->assertState('found', true);
 });
 
 check('Concise state helper rejects unmarked properties and unknown names', function () use ($renderer): void {
@@ -2049,7 +2025,7 @@ check('Reusable component instances receive isolated state scopes', function () 
         }
     };
     $html = $renderer->render(Group($factory(), $factory()));
-    preg_match_all('/data-aml-bind="([^"]+\.i[12]\.count)"/', $html, $matches);
+    preg_match_all('/\"\$state\":\"([^\"]+\.i[12]\.count)\"/', html_entity_decode($html, ENT_QUOTES, 'UTF-8'), $matches);
     expect(
         count(array_unique($matches[1])) === 2
         && substr_count($html, 'data-aml-state=') === 2,
@@ -2357,7 +2333,7 @@ check('Frontend closures continue to reject arbitrary static calls', function ()
         public function body(): View
         {
             InlineEffect(function (): void {
-                DateTime::createFromFormat('U', $this->counter);
+                \Reflection::getModifierNames($this->counter);
             }, [$this->state('counter')]);
 
             return Text('{counter}');
@@ -2367,7 +2343,7 @@ check('Frontend closures continue to reject arbitrary static calls', function ()
     ViewTest::assertThrows(
         static fn () => ViewTest::render($component),
         \InvalidArgumentException::class,
-        'Frontend statements must assign or update a #[State] property through $this.',
+        'Unsupported frontend internal function or method',
     );
 });
 

@@ -1,6 +1,12 @@
 name: Public API compatibility
 
 on:
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: Matching Engine revision for candidate verification
+        type: string
+        required: false
   pull_request:
   push:
     branches: [main]
@@ -17,6 +23,16 @@ jobs:
         with:
           php-version: '8.4'
           tools: composer
+      - uses: actions/checkout@v5
+        if: inputs.engine_ref != ''
+        with:
+          repository: MR-C0DE/phpaml-engine
+          ref: ${{ inputs.engine_ref }}
+          path: .ci/phpaml-engine
+      - name: Select the candidate Engine dependency
+        if: inputs.engine_ref != ''
+        run: |
+          php -r '$p=json_decode(file_get_contents("composer.json"),true); $e=json_decode(file_get_contents(".ci/phpaml-engine/composer.json"),true); $p["repositories"][]=["type"=>"path","url"=>".ci/phpaml-engine","options"=>["versions"=>["phpaml/engine"=>$e["extra"]["phpaml"]["version"]]]]; file_put_contents("composer.json",json_encode($p,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
       - name: Select the latest published version
         id: baseline
         shell: bash

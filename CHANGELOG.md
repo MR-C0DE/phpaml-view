@@ -2,6 +2,88 @@
 
 All notable changes follow Semantic Versioning.
 
+## 0.1.0-beta.13 — 2026-10-16
+
+- coordinate distribution with CLI `1.7.0-beta.45`, View `0.1.0-beta.13` and
+  Engine `0.1.0-beta.9`; the CLI release check creates a real application from
+  ZIP packages and verifies its development and production runtimes.
+
+- Run installed frontend application checks in CI with both Engine runtimes on Chromium, Firefox and WebKit, using candidate Composer distributions and a configurable matching Engine revision.
+
+- Stabilize existing rendering: preserve ordinary child components when their parent has no readable source, cache lexical imports with content-based invalidation, and avoid recompiling static labels. Add a reproducible four-scenario render benchmark.
+- Fix AML Tasks duplicate titles, submitted form validation, shared dashboard counts and locale races during navigation. Load the current local Engine as a cacheable external asset instead of embedding it in every page.
+- Exercise complete task, reservation and catalogue workflows, including persistence, navigation, invalid input and recovery; add source-less parent and import-invalidation regressions without extending the frontend language.
+
+- Bind child form controls back to forwarded parent State, including nested children, named spreads, nullable values and scalar array fields, without merging child State scopes. Reject calculated and computed form targets explicitly.
+- Recognize direct component construction and simple factories; support fully unpacked Component() arguments. Project inherited constructors, named helper methods, dynamic declared-property access, early returns and PHP 8.4 hooks in isolated temporary objects, with type-error recovery and CSP browser tests.
+
+- Preserve reactive helper arguments through unpacking, named keys, changing variadic tails and explicitly assigned function callables.
+- Forward parent inputs through `Component()` constructors into promoted and locally derived properties, nested child displays, templates and event reads, while preserving child State isolation.
+- Validate derived property types on updates, preserve the last valid display on failure, and recover after correction. Constructors run only once on PHP.
+- Add PHP/ViewTest and CSP browser coverage for component composition.
+
+- Preserve reactive dependencies through mutable local calculations and view helper arguments; support mixed variadic spreads and identifiable callable factories. Keep failed display values and expose located render diagnostics in ViewTest. Add ten ctype functions and five hash helpers, with PHP differential and CSP browser coverage.
+- Extend seven frontend language areas: dynamic operands and symbols, seeded random generators, bounded advanced regex, dates/Intl/Unicode validation, reference destructuring/generators/properties, hooks/reflection/serialization/SPL, and named eval classes/enums/namespaces. Add native differential and CSP browser coverage and document exact adapter limits in View's extensions-langage guide.
+
+- Add URL/Base64 helpers and filter_var_array, grapheme-aware reactive text, Normalizer and a bounded NumberFormatter adapter. Compile dynamic new/static targets and full nullsafe receiver chains, including eval and generators. Add native differential and CSP browser coverage, a combined profile example and an exact-scope guide.
+
+- Align dynamic eval bitwise assignments with compiled events; correct invalid operand handling, integer result metadata and arrow-function parsing inside arrays and match arms.
+- Interpret JsonSerializable hooks, add format-based date parsing and diagnostics, calendar intervals/diffs/periods, and closed-catalogue callable/validation utilities. Add differential tests, CSP browser coverage, exact scope guides and a reservation example covering leap dates, DST and invalid input.
+- Compare DateTime and DateTimeImmutable by timestamp and microseconds across timezones, including date arrays, searches, regular sorting and min/max; reject ambiguous comparisons of other adapted date objects explicitly.
+- Consolidate the frontend compatibility matrix and generate its native function list directly from Engine; check documentation drift in CI. Correct earlier guides that still excluded service objects, iterators and generators.
+- Add JSON codecs and error state, opaque stdClass values, a bounded PCRE subset and DateTime/DateTimeImmutable/DateTimeZone adapters with explicit parsing/timezone limits. Add a combined JSON/catalogue example and native differential/browser coverage.
+- Extend SPL with ArrayIterator/ArrayObject and iterator_* helpers, Traversable unpacking, reference aliases, referenced arrays, by-reference foreach and function returns. Preserve State rollback independently of live reference cells.
+- Compile user enums, additional logical/bitwise operators, function static locals, argument introspection, computed method names and method array/string callables. Preserve component isolation and document remaining advanced-PHP boundaries.
+
+- Interpret lazy generators (`yield`, `yield from`) in services, closures and eval, including suspended expressions, send/throw/getReturn, typed keys and bounded resumption across component clicks. Preserve console output, State rollback and PHP source diagnostics; add differential and CSP browser tests and a French catalogue example. Automatic garbage-collection finalization remains outside the frontend contract.
+
+- Interpret Iterator/IteratorAggregate foreach in browser events and service functions, with Traversable/iterable contracts, is_iterable (290 native helpers), lazy traversal, typed keys, control flow and bounded delegation. Validate anonymous interface contracts and preserve rollback, source diagnostics and console behavior; add native differential tests, browser coverage and a French example/guide.
+
+- Support Countable and ArrayAccess service collections, count/sizeof/is_countable (289 native helpers), offset reads/writes, quiet access, destructuring and reference semantics. Preserve PHP indirect-write notices and argument evaluation; add differential tests, CSP browser coverage and a French shopping-cart example/guide.
+
+- Add twelve scope-aware object introspection builtins (288 native functions total) and __debugInfo console views. Preserve inherited visibility, method spelling/order, aliases, named/spread arguments, callbacks and eval; normalize debug hook failures into catchable frontend errors. Add differential tests, CSP browser coverage and a French example/guide.
+
+- Support anonymous frontend classes and intersection/DNF type contracts, with constructors, typed/promoted properties, inheritance/interface validation, component-scoped statics and fresh anonymous identities per eval. Add differential PHP/ViewTest/Engine tests and browser coverage.
+
+- Implement nine service magic methods for properties, instance/static method dispatch, invokable objects, Stringable conversions and cloning. Preserve visibility, strict types, named arguments, indirect-write notices, recursion guards and readonly clone behavior; add native differential tests, browser coverage and a profile example.
+
+- Support typed service static properties with self/parent/late-static access, inheritance, visibility, references and eval. Keep storage isolated per component across handlers; reset on component recreation and retain static side effects after event errors. Add native PHP/ViewTest/Engine comparisons and Chrome lifecycle coverage.
+
+- Compile and interpret local service objects: constructors, typed/readonly properties, visibility, inheritance, interfaces, traits, static dispatch, method closures, shallow cloning and existing-class eval. Preserve identity and float metadata, reject object State, and verify native PHP/ViewTest/Chrome behavior.
+
+- Compile bounded static and dynamic eval(), preserve caller locals/references and State, isolate return, retain function declarations and catchable diagnostics; add a French guide and browser example.
+
+- Add print_r/var_export (276 native functions total), console-only output or returned strings, pure reactive display, bounded nested formatting and native callbacks; preserve compiled negative zero literals.
+
+- Add all 14 procedural BCMath functions (274 native functions total), exact bounded decimal arithmetic, eight bcround modes, typed local RoundingMode values and event-local bcscale; verify native PHP parity, pure reactive totals, source diagnostics and error rollback.
+
+- Add 28 UTF-8 mbstring functions (260 native functions total), deterministic PHP-generated Unicode tables, bounded code-point operations, named arguments and native callbacks; verify PHP/ViewTest/Engine parity and reactive browser updates with accents and emoji.
+
+- Expand the native catalogue to 232 math, string, array and scalar helper functions; share reflected signatures, named/spread/reference arguments and native callbacks across ViewTest and Engine. Separate runtime modules, retain pure reactive display rules, add differential PHP tests and a browser example.
+
+- Compile `try/catch/finally`, throw expressions, standard and inherited custom exceptions, Throwable contracts/getters and PHP-configured assertions; preserve caught State changes and simulate propagation in ViewTest. Add level 10 service examples, native-PHP comparisons and browser trace/mode checks.
+
+- Connect component-scoped `FileInput` controls to local browser text/JSON/CSV imports and downloads through Engine `BrowserFiles`; add filesystem diagnostics, a persisted-data example and a level 9 guide with explicit browser boundaries.
+
+- Share reactive text handling across native text/label components: direct state, concatenation, PHP interpolation, repeated placeholders, multiline strings and read-only formatters; preserve SSR escaping, option markup and accessible overlay names. Add compiler diagnostics and PHP/Chrome coverage.
+
+- Compile 25 string, validation and numeric builtins with typed/named/spread arguments, replacement counters and PHP source diagnostics; add browser input/menu and integer-cent examples, and explicit CLI-only diagnostics.
+- Verify levels 7–8 against native PHP, ViewTest and Chrome, including terminal streams/exit status; resolve service names from first-class method callables and preserve lexical namespaces of PHP 8.4 closures.
+
+- Compile user functions from loaded services, real function frames and returns, typed/default/named/variadic parameters, references, closures and bounded recursion; compare results and failures with native PHP.
+
+- Compile dynamic bounded loops, switch/match, empty/isset, PHP array literals and mutations, destructuring, spread, collection callbacks and console-only echo; add native-PHP parity tests.
+
+- Compile PHP 8 operator precedence, power, strict/loose comparisons, lazy logic/ternaries/coalescing, assignment expressions and pre/post increments; verify against native PHP.
+- Enforce scalar state contracts, nullable and union types with PHP strict/weak assignment modes; report PHP source locations for compiled instructions.
+- Resolve aliased/grouped constant imports and loaded class constants; compare body diagnostics and frontend failures against native PHP.
+- compile invocation-local variables with value snapshots, branch updates and
+  isolated scalar captures; keep bounded-loop control assignments in execution order;
+- support scalar `gettype()`, console `var_dump()`, file/component constants,
+  interpolated strings and PHP escape sequences;
+- retain integral floats in manifests and align scalar conversions with PHP;
+- require Engine beta.9 and verify compiler/runtime results against native PHP.
+
 ## 0.1.0-beta.12 — 2026-10-13
 
 - add natural PHP handlers for keyboard, mouse and drag-and-drop events;

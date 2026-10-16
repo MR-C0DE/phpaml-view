@@ -42,6 +42,7 @@ class Element implements View
 
     public function __construct(private string $tag, View ...$children)
     {
+        NaturalStateBindings::captureChildren($children);
         $this->children = $children;
     }
 
@@ -642,6 +643,10 @@ class Element implements View
     public function model(string|StateRef $state): static
     {
         [$name] = self::reactiveState($state);
+        if ($state instanceof StateRef && is_scalar($state->initial)) {
+            $type = match (gettype($state->initial)) { 'integer' => 'int', 'double' => 'float', 'boolean' => 'bool', default => 'string' };
+            $this->attribute('data-aml-model-type', $type);
+        }
         return $this
             ->attribute('data-aml-model', $name)
             ->attribute('data-aml-bind', $name);
