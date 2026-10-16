@@ -51,9 +51,9 @@ jobs:
         run: |
           engine="$(php tests/language-level1.php --engine-root)"
           npm ci --prefix "$engine"
-      - run: composer test:language-runtime
-        env:
-          COMPOSER_PROCESS_TIMEOUT: 120
+      - name: Run every frontend language suite
+        run: |
+          php -r '$p=json_decode(file_get_contents("composer.json"),true); $failed=0; foreach($p["scripts"]["test:language-runtime"] as $command) { echo "Running $command\n"; passthru("timeout 120s ".$command,$code); if($code!==0) {fwrite(STDERR,"FAILED: $command\n"); $failed=1;} } exit($failed);'
 
   frontend-packages:
     name: Installed frontend applications (${{ matrix.runtime }})

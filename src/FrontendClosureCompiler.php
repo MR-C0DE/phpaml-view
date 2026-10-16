@@ -1185,6 +1185,8 @@ final class FrontendClosureCompiler
         if (self::$evalSource !== null) return self::$evalSource;
         static $intlCurrencyFromLocale = null;
         $intlCurrencyFromLocale ??= extension_loaded('intl') && (new \NumberFormatter('en_US', \NumberFormatter::DECIMAL))->getTextAttribute(\NumberFormatter::CURRENCY_CODE) !== 'XXX';
+        static $graphemeEmptySearchCodeUnits = null;
+        $graphemeEmptySearchCodeUnits ??= function_exists('grapheme_strrpos') && grapheme_strrpos('😀', '') === 2;
         $file = $function->getFileName();
         $source = $file === false ? '' : (string) file_get_contents($file);
         $source = implode('', array_map(static fn ($token): string => is_array($token)
@@ -1195,6 +1197,7 @@ final class FrontendClosureCompiler
             ...((string) ini_get('arg_separator.output') !== '&' ? ['argSeparatorOutput' => (string) ini_get('arg_separator.output')] : []),
             ...(extension_loaded('intl') ? ['intlLocale' => \Locale::getDefault()] : []),
             ...($intlCurrencyFromLocale ? ['intlCurrencyFromLocale' => true] : []),
+            ...($graphemeEmptySearchCodeUnits ? ['graphemeEmptySearchCodeUnits' => true] : []),
             'function' => str_contains($function->getName(), '{closure') ? '{closure}' : $function->getName(),
             ...(function_exists('mb_internal_encoding') && !in_array(strtoupper(mb_internal_encoding()), ['UTF-8', 'UTF8'], true) ? ['mbEncoding' => mb_internal_encoding()] : []),
             ...(function_exists('mb_substitute_character') && mb_substitute_character() !== 63 ? ['mbSubstitute' => mb_substitute_character()] : []),
