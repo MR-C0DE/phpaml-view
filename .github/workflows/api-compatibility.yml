@@ -16,7 +16,7 @@ jobs:
     name: Compare public API with latest release
     runs-on: ubuntu-24.04
     env:
-      COMPOSER_HOME: ${{ runner.temp }}/phpaml-api-composer
+      COMPOSER_HOME: ${{ github.workspace }}/.ci/composer-home
     steps:
       - uses: actions/checkout@v5
         with:
