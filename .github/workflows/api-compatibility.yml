@@ -15,6 +15,8 @@ jobs:
   backward-compatibility:
     name: Compare public API with latest release
     runs-on: ubuntu-24.04
+    env:
+      COMPOSER_HOME: ${{ runner.temp }}/phpaml-api-composer
     steps:
       - uses: actions/checkout@v5
         with:
@@ -29,10 +31,11 @@ jobs:
           repository: MR-C0DE/phpaml-engine
           ref: ${{ inputs.engine_ref }}
           path: .ci/phpaml-engine
-      - name: Select the candidate Engine dependency
+      - name: Select the candidate Engine dependency for both comparison checkouts
         if: inputs.engine_ref != ''
         run: |
-          php -r '$p=json_decode(file_get_contents("composer.json"),true); $e=json_decode(file_get_contents(".ci/phpaml-engine/composer.json"),true); $p["repositories"][]=["type"=>"path","url"=>".ci/phpaml-engine","options"=>["versions"=>["phpaml/engine"=>$e["extra"]["phpaml"]["version"]]]]; file_put_contents("composer.json",json_encode($p,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
+          repository="$(php -r '$e=json_decode(file_get_contents(".ci/phpaml-engine/composer.json"),true); echo json_encode(["type"=>"path","url"=>realpath(".ci/phpaml-engine"),"options"=>["versions"=>["phpaml/engine"=>$e["extra"]["phpaml"]["version"]]]]);')"
+          composer config --global repositories.phpaml-engine "$repository"
       - name: Select the latest published version
         id: baseline
         shell: bash
