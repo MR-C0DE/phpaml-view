@@ -155,7 +155,7 @@ trait ObjectEvaluation
         if (!$member || !$this->objectAccessible($member)) {
             $bound = $value ?? (($options['forward'] ?? false) && $this->thisObject?->is($class) ? $this->thisObject : null);
             $magic = $this->objectMemberDefinition($class, $bound ? '__call' : '__callstatic', 'methods', false);
-            if ($magic) return new TestCallable($magic['id'], thisObject: $bound, objectScope: $magic['owner'], calledClass: ($options['forward'] ?? false) ? ($this->calledClass ?? $class) : $class, magicName: $options['name']);
+            if ($magic) return new TestCallable($magic['id'], thisObject: $bound, objectScope: $magic['owner'], calledClass: ($options['forward'] ?? false) ? ($this->calledClass ?? $class) : $class, magicName: $options['name'], magicClosure: $options['firstClass'] ?? false);
         }
         if (!$member) throw new \Error("Call to undefined method {$class}::{$options['name']}()");
         if (!$this->objectAccessible($member)) throw new \Error("Call to {$member['visibility']} method {$member['owner']}::{$options['name']}()");
@@ -211,7 +211,7 @@ trait ObjectEvaluation
         }
         $value = $this->resolveValue($expression['left']);
         if ($operation === 'objectClone') {
-            if($value instanceof TestCallable)return new TestCallable($value->id,$value->values,$value->references,$value->thisObject,$value->objectScope,$value->calledClass,$value->magicName,$value->staticLocals?clone $value->staticLocals:null);
+            if($value instanceof TestCallable)return new TestCallable($value->id,$value->values,$value->references,$value->thisObject,$value->objectScope,$value->calledClass,$value->magicName,$value->staticLocals?clone $value->staticLocals:null,$value->magicClosure);
             if ($value instanceof TestObject && isset($this->nativeIntl[$value])) { $copy=$this->makeTestObject($value->definition,[]);$this->nativeIntl[$copy]=clone $this->nativeIntl[$value];if(isset($this->intlExplicitPatterns[$value]))$this->intlExplicitPatterns[$copy]=$this->intlExplicitPatterns[$value];return $copy; }
             if ($value instanceof TestObject && isset($this->nativeDates[$value])) return $this->dateInterpreted(clone $this->nativeDates[$value]);
             if ($value instanceof TestObject && ($value->definition['enum'] ?? false)) throw new \Error('Trying to clone an uncloneable enum');
@@ -237,7 +237,7 @@ trait ObjectEvaluation
         if (isset($options['class']) && $options['class'] !== '@static') $options['class']=$this->resolveValue($options['class']);
         $options['name'] = $this->resolveValue($options['name']);
         if (!is_string($options['name'])) throw new \Error('Method name must be a string');
-        $callable = $this->objectMethod($value, $options);
+        $callable = $this->objectMethod($value, [...$options, 'firstClass' => $operation === 'objectMethodRef']);
         return $operation === 'objectMethodRef' ? $callable : $this->functionExpression(['operation' => 'call', 'left' => $callable, 'right' => $options]);
     }
     private function objectDump(mixed $value, int $depth = 0, ?\SplObjectStorage $seen = null, int &$budget = 10000): string

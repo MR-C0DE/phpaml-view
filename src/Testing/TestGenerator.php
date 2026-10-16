@@ -28,7 +28,7 @@ final class TestGenerator extends TestObject
     public static function descriptor(): array
     {
         $methods = [];
-        foreach (['rewind', 'valid', 'current', 'key', 'next', 'send', 'throw', 'getReturn', PHP_VERSION_ID >= 80400 ? '__debugInfo' : '__wakeup'] as $name) $methods[strtolower($name)] = ['name' => $name, 'id' => '@generator:' . strtolower($name), 'visibility' => 'public', 'owner' => 'Generator', 'static' => false, 'abstract' => false];
+        foreach (['rewind', 'valid', 'current', 'key', 'next', 'send', 'throw', 'getReturn', ...(PHP_VERSION_ID >= 80400 ? ['__debugInfo'] : [])] as $name) $methods[strtolower($name)] = ['name' => $name, 'id' => '@generator:' . strtolower($name), 'visibility' => 'public', 'owner' => 'Generator', 'static' => false, 'abstract' => false];
         return ['name' => 'Generator', 'ancestors' => ['Iterator', 'Traversable'], 'parent' => null, 'properties' => [], 'staticProperties' => [], 'methods' => $methods, 'constants' => [], 'final' => true, 'abstract' => false];
     }
     public static function discarding(): bool

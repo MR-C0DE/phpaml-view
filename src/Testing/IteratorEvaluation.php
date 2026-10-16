@@ -20,6 +20,8 @@ trait IteratorEvaluation
         $frozen=$this->freezeTarget($target);$parent=$this->functionReference($frozen);
         if(($generator=($parent['get'])()) instanceof TestGenerator) { if(!($generator->frame[11]??false))throw new \Error('You can only iterate a generator by-reference if it declared that it yields by-reference');$this->generatorMethod($generator,'rewind');$count=0;while($this->generatorMethod($generator,'valid')){$this->iteration(++$count,$limit);yield [$this->generatorMethod($generator,'key'),$generator->packet[2]];$this->generatorMethod($generator,'next');}return; }
 
+        // Do not retain an array copy while iterating its live reference on PHP 8.2.
+        unset($generator);
         if ($this->isSplObject(($parent['get'])())) { $storage = $this->splStorage[($parent['get'])()]; $count = 0; foreach ($storage as $key => &$value) { $this->iteration(++$count, $limit); yield [$key, ['get' => static function () use (&$value) { return $value; }, 'set' => static function ($next) use (&$value) { return $value = $next; }, 'bind' => static function &() use (&$value) { return $value; }]]; } return; }
         if (!is_array(($parent['get'])())) throw new \Error('Frontend foreach by reference requires an array');
         if (!isset($parent['bind'])) throw new \Error('Frontend foreach by reference requires a local array');

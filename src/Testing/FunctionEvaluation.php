@@ -67,8 +67,8 @@ trait FunctionEvaluation
                 'get' => fn (bool $quiet = false) => $this->offsetValue(($parent['get'])(), $key, $quiet),
                 'probe' => fn (bool $issetOnly = false) => $this->offsetValue(($parent['get'])(), $key, true, $issetOnly),
                 'acquire' => function () use ($parent, $key) { $value = $this->offsetValue(($parent['get'])(), $key, true); if (isset($parent['warnIndirect'])) ($parent['warnIndirect'])(); return $value; },
-                'set' => function ($value) use ($parent, $key, $expression) { $array = ($parent['get'])(); if($expression['operation'] !== 'appendOffset' && is_array($array) && array_key_exists(is_string($key)||is_int($key)?$key:($key===null?'':(int)$key),$array) && \ReflectionReference::fromArrayElement($array,is_string($key)||is_int($key)?$key:($key===null?'':(int)$key))) { $this->setReferenceValue($array[$key],$value); return $value; } if ($expression['operation'] === 'appendOffset') $array[] = $value; else $array[$key] = $value; ($parent['set'])($array); return $value; },
-                'remove' => static function () use ($parent, $key) { $array = ($parent['get'])(); if ($array !== null) { unset($array[$key]); ($parent['set'])($array); } },
+                'set' => function ($value) use ($parent, $key, $expression) { $live = isset($parent['bind']) && ($parent['embeddable'] ?? true); if ($live) $array = &($parent['bind'])(); else $array = ($parent['get'])(); if($expression['operation'] !== 'appendOffset' && is_array($array) && array_key_exists(is_string($key)||is_int($key)?$key:($key===null?'':(int)$key),$array) && \ReflectionReference::fromArrayElement($array,is_string($key)||is_int($key)?$key:($key===null?'':(int)$key))) { $this->setReferenceValue($array[$key],$value); return $value; } if ($expression['operation'] === 'appendOffset') $array[] = $value; else $array[$key] = $value; if (!$live) ($parent['set'])($array); return $value; },
+                'remove' => static function () use ($parent, $key) { $live = isset($parent['bind']) && ($parent['embeddable'] ?? true); if ($live) $array = &($parent['bind'])(); else $array = ($parent['get'])(); if ($array !== null) { unset($array[$key]); if (!$live) ($parent['set'])($array); } },
             ];
         }
         throw new \Error('Argument cannot be passed by reference');
@@ -153,6 +153,7 @@ trait FunctionEvaluation
         }
         if (is_string($callable)) throw new \Error("Call to undefined frontend function {$callable}()");
         if (!$callable instanceof TestCallable) throw $callable instanceof \Closure ? new \TypeError('Value is not a compiled frontend callable') : new \Error('Value is not a compiled frontend callable');
+        if ($callable->magicClosure && PHP_VERSION_ID < 80300) foreach ($arguments as $argument) if (isset($argument['name'])) throw new \Error('Unknown named parameter $' . $argument['name']);
         if ($callable->magicName !== null) $arguments = [['value' => $callable->magicName], ['value' => $this->magicArguments($arguments)]];
         if ($callable->thisObject instanceof TestGenerator) return $this->generatorMethod($callable->thisObject, substr($callable->id, 11), $arguments);
         $definition = $this->functions[$callable->id];

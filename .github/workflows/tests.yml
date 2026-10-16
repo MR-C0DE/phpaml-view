@@ -17,6 +17,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -40,16 +41,19 @@ jobs:
           php -r '$p=json_decode(file_get_contents("composer.json"),true); $e=json_decode(file_get_contents(".ci/phpaml-engine/composer.json"),true); $p["repositories"][]=["type"=>"path","url"=>".ci/phpaml-engine","options"=>["versions"=>["phpaml/engine"=>$e["extra"]["phpaml"]["version"]]]]; file_put_contents("composer.json",json_encode($p,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
       - run: composer install --no-interaction --prefer-dist
       - run: composer docs:check
-      - name: Diagnose native array construction across PHP versions
-        run: |
-          php -r '$k=-3; $v="start"; $cases=[["s"=>"string",-3=>"start"],["s"=>"string",$k=>$v],array_combine(["s",-3],["string","start"]),unserialize(serialize(["s"=>"string",-3=>"start"]))]; $a=[]; $a["s"]="string"; $a[-3]="start"; $cases[]=$a; foreach($cases as $a) {$a[]="next"; echo json_encode(array_keys($a))."\n";}'
       - name: Run every PHP suite
         run: |
-          php -r '$p=json_decode(file_get_contents("composer.json"),true); $failed=0; foreach($p["scripts"]["test"] as $command) { echo "Running $command\n"; passthru($command,$code); if($code!==0) {fwrite(STDERR,"FAILED: $command\n"); $failed=1;} } exit($failed);'
+          php -r '$p=json_decode(file_get_contents("composer.json"),true); $failed=0; foreach($p["scripts"]["test"] as $command) { echo "Running $command\n"; passthru("timeout 120s ".$command,$code); if($code!==0) {fwrite(STDERR,"FAILED: $command\n"); $failed=1;} } exit($failed);'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install Engine source-test dependencies
+        run: |
+          engine="$(php tests/language-level1.php --engine-root)"
+          npm ci --prefix "$engine"
       - run: composer test:language-runtime
+        env:
+          COMPOSER_PROCESS_TIMEOUT: 120
 
   frontend-packages:
     name: Installed frontend applications (${{ matrix.runtime }})

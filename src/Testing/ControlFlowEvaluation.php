@@ -102,10 +102,25 @@ trait ControlFlowEvaluation
         if ($operation === 'array') {
             $result = [];
             foreach ($expression['left'] as $entry) {
-                if (array_key_exists('spread', $entry)) { $spread = $this->resolveValue($entry['spread']); $result = [...$result, ...(is_array($spread) ? $spread : $this->spreadEntries($spread))]; continue; }
-                if ($entry['reference'] ?? false) { $key = array_key_exists('key', $entry) ? $this->resolveValue($entry['key']) : null; $ref = $this->promoteReference($entry['value']); if (($ref['embeddable'] ?? true) === false || !isset($ref['bind'])) throw new \Error('This reference cannot be stored in an array'); if (array_key_exists('key', $entry)) $result[$key] = &($ref['bind'])(); else $result[] = &($ref['bind'])(); continue; }
-                if (array_key_exists('key', $entry)) { $key = $this->resolveValue($entry['key']); $result[$key] = $this->resolveValue($entry['value']); }
-                else $result[] = $this->resolveValue($entry['value']);
+                if (array_key_exists('spread', $entry)) {
+                    $spread = $this->resolveValue($entry['spread']);
+                    $result = [...$result, ...(is_array($spread) ? $spread : $this->spreadEntries($spread))];
+                } elseif ($entry['reference'] ?? false) {
+                    $key = array_key_exists('key', $entry) ? $this->resolveValue($entry['key']) : null;
+                    $ref = $this->promoteReference($entry['value']);
+                    if (($ref['embeddable'] ?? true) === false || !isset($ref['bind'])) throw new \Error('This reference cannot be stored in an array');
+                    if (array_key_exists('key', $entry)) $result[$key] = &($ref['bind'])();
+                    else $result[] = &($ref['bind'])();
+                } elseif (array_key_exists('key', $entry)) {
+                    $key = $this->resolveValue($entry['key']);
+                    $result[$key] = $this->resolveValue($entry['value']);
+                } else {
+                    $result[] = $this->resolveValue($entry['value']);
+                }
+                // PHP 8.2 gives literals a negative next index, unlike offset assignment.
+                // Rebuilding preserves key order and reference cells, and restores that index.
+                $last = array_key_last($result);
+                if (PHP_VERSION_ID < 80300 && is_int($last) && $last < 0) $result = array_combine(array_keys($result), $result);
             }
             return $result;
         }

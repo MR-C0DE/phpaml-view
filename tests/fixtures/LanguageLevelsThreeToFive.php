@@ -160,6 +160,9 @@ final class LanguageLevelsThreeToFive extends Page
         $this->result['callbackParameter'] = array_map(fn ($v) => ++$v, [1, 2]);
         $negative = ['s' => 'string', -3 => 'start']; $negative[] = 'next';
         $this->result['negativeAppend'] = array_keys($negative);
+        $assigned = []; $assigned[-3] = 'start'; $assigned[] = 'next';
+        $literal = [-3 => 'start', 'next']; $literal[] = 'last';
+        $this->result['negativeConstruction'] = [array_keys($assigned), array_keys($literal)];
         $coerced = [true => 'bool', null => 'null', '1' => 'replace', '01' => 'string', 3.75 => 'float'];
         $this->result['coercedKeys'] = array_keys($coerced);
         $duplicates = ['a' => 1, 'b' => 2, 'a' => 3];

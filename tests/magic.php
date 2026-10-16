@@ -10,7 +10,7 @@ $methods = ['referenceGet','notInvokable','readonlyUnsetClone','unsetWrite','uns
 if (($argv[1] ?? '') === '--native') {
     $page = new MagicPage(); $error = null; $warnings = [];
     set_error_handler(static function ($severity, $message) use (&$warnings): bool { $warnings[] = $message; return true; }); ob_start();
-    try { $page->{$argv[2]}(); } catch (Throwable $e) { $error = ['name' => $e::class]; }
+    try { $page->{$argv[2]}(); } catch (Throwable $e) { $error = ['name' => $e::class, 'message' => $e->getMessage()]; }
     finally { $output = ob_get_clean(); restore_error_handler(); }
     echo json_encode(['expected' => ['result' => $page->result, 'counter' => $page->counter], 'error' => $error, 'warnings' => $warnings, 'output' => $output], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION); exit;
 }
@@ -26,7 +26,7 @@ foreach ($methods as $method) {
     $test = new TestView($html); $failure = null; $viewWarnings = [];
     set_error_handler(static function ($severity, $message) use (&$viewWarnings): bool { $viewWarnings[] = $message; return true; });
     try { $test->click('Run'); } catch (Throwable $e) { $failure = $e; } finally { restore_error_handler(); }
-    if (($failure !== null) !== ($error !== null) || $failure && $failure::class !== $error['name']) throw new RuntimeException($method . ': ' . ($failure?->getMessage() ?? 'unexpected success'), previous: $failure);
+    if (($failure !== null) !== ($error !== null) || $failure && $failure::class !== $error['name']) throw new RuntimeException($method . ': ' . ($failure?->getMessage() ?? 'unexpected success') . '; native=' . json_encode($error), previous: $failure);
     try { foreach ($error ? $initial : $expected as $name => $value) $test->assertState($name, $value); }
     catch (Throwable $e) { throw new RuntimeException($method . ': ' . $e->getMessage(), previous: $e); }
     if (count($viewWarnings) !== count($warnings)) throw new RuntimeException($method . ': warnings ' . json_encode($viewWarnings) . ' expected ' . json_encode($warnings));

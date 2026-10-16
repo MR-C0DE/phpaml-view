@@ -4,6 +4,12 @@ All notable changes follow Semantic Versioning.
 
 ## 0.1.0-beta.13 — 2026-10-16
 
+- Correct PHP 8.2/8.3 compatibility for negative array indices, Generator
+  introspection and named magic-method closures; preserve live by-reference
+  array traversal in ViewTest. Preserve the compiling server’s ICU default
+  currency semantics for noncurrency NumberFormatter styles. Verify all three
+  supported PHP versions in CI.
+
 - coordinate distribution with CLI `1.7.0-beta.45`, View `0.1.0-beta.13` and
   Engine `0.1.0-beta.9`; the CLI release check creates a real application from
   ZIP packages and verifies its development and production runtimes.
