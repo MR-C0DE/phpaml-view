@@ -20,6 +20,7 @@ const {installEvalCompiler} = await import(pathToFileURL(resolve(engine, 'src-js
 const {compileEval} = await import(pathToFileURL(resolve(engine, 'src-js/eval/compiler.js')));
 installEvalCompiler(compileEval);
 const {rootConfigs} = await import(pathToFileURL(resolve(engine, 'src-js/context.js')));
+const failures = [];
 for (const sample of samples) {
   const events = [];
   const root = {dispatchEvent: (event) => events.push(event), querySelector: () => null, querySelectorAll: () => []};
@@ -53,6 +54,9 @@ for (const sample of samples) {
       assert.equal(normalize(logs.join('')), sample.output, sample.method + ': echo output');
       assert.equal(events.filter((event) => event.type === 'aml:warning').length, sample.warnings.length, sample.method + ': warning parity');
     }
-  } finally {console.warn = originalWarn; console.log = originalLog;}
+  } catch (error) {failures.push(sample.method + ': ' + error.message);}
+  finally {console.warn = originalWarn; console.log = originalLog;}
 }
-console.log(`Utility functions: ${samples.length} cross-runtime scenarios passed.`);
+for (const failure of failures) console.error(failure);
+console.log(`Utility functions: ${samples.length - failures.length}/${samples.length} cross-runtime scenarios passed.`);
+if (failures.length) process.exitCode = 1;
