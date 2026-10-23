@@ -1,0 +1,5 @@
+.label { color: black; }
+@supports (display: grid) {
+    @media (600px < width < 2000px) { .label { color: rgb(1, 2, 3); } }
+}
+.label::after { content: " Local"; }

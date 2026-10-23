@@ -35,10 +35,11 @@ trait FrontendDisplayCompiler
             $closure = $initial instanceof \Closure ? $initial : null;
             $tokens = self::displayProperties($tokens, $component, $source, $closure === null);
             $locals = array_intersect_key($locals, self::displayLocalNames([...$tokens, ...$program]));
-            $locals = array_map(static fn ($value) => $value instanceof DisplayValue ? $value->expression : ($value instanceof StateRef || $value instanceof StateExpression ? $value : self::literalValue($value)), $locals);
+            $locals = array_map(static fn ($value) => $value instanceof DisplayValue ? $value->expression : ($value instanceof CollectionItem || $value instanceof StateRef || $value instanceof StateExpression ? $value : ($value instanceof \Closure ? self::capturedClosure($value) : self::literalValue($value))), $locals);
             $actions = [];
             if ($program !== []) {
                 foreach ($locals as $name => $value) {
+                    if ($value instanceof CollectionItem || $value instanceof StateRef) continue;
                     $locals[$name] = new FrontendLocal($name, $value);
                     $actions[] = new \AML\Engine\LocalAction($locals[$name]->id(), $value);
                 }
@@ -85,12 +86,12 @@ trait FrontendDisplayCompiler
                 $initial = InitialTextValue::evaluate($expression);
             }
             $result = self::displayResult($expression, $closure ? null : $initial, $source, $preserveArray, $forceExpression);
-            return $closure === null ? $result : ($result instanceof DisplayValue ? new DisplayValue($closure(), $result->expression) : new TextView($closure));
+            return $closure === null ? $result : ($result instanceof DisplayValue ? new DisplayValue(self::initialClosureValue($closure, $result->expression, $forceExpression), $result->expression) : new TextView($closure));
         } catch (\Throwable $error) { throw self::locatedError($error, $source); }
         finally { [self::$functions, self::$functionContext, self::$functionStates, self::$nestedNames, self::$functionAllowsThis, self::$displayComponent, self::$classes, self::$objectScope] = $previous; }
     }
 
-    public static function displayClosure(\Closure $closure): mixed
+    public static function displayClosure(\Closure $closure, bool $preserveArray = false, bool $forceExpression = false): mixed
     {
         $previous = [self::$functions, self::$functionContext, self::$functionStates, self::$nestedNames, self::$functionAllowsThis, self::$displayComponent, self::$classes, self::$objectScope];
         self::$functions = []; self::$nestedNames = []; self::$classes = []; self::$objectScope = null; self::$functionContext = new \ReflectionFunction($closure);
@@ -99,17 +100,38 @@ trait FrontendDisplayCompiler
         try {
             $source = self::sourceLocation(self::$functionContext);
             $expression = new StateExpression('call', self::capturedClosure($closure), ['arguments' => [], 'source' => $source]);
-            // The closure is only invoked by PHP once, for the initial render, after validation.
-            $result = self::displayResult($expression, null, $source);
-            return $result instanceof DisplayValue ? new DisplayValue($closure(), $result->expression) : $closure;
+            // Reuse bounded IR evaluation for collections and captured StateRef handles.
+            $result = self::displayResult($expression, null, $source, $preserveArray, $forceExpression);
+            return $result instanceof DisplayValue ? new DisplayValue(self::initialClosureValue($closure, $result->expression, $forceExpression), $result->expression) : $closure;
         } catch (\Throwable $error) { throw self::locatedError($error, self::sourceLocation(new \ReflectionFunction($closure))); }
         finally { [self::$functions, self::$functionContext, self::$functionStates, self::$nestedNames, self::$functionAllowsThis, self::$displayComponent, self::$classes, self::$objectScope] = $previous; }
+    }
+
+    /** StateRef is a PHP handle; interpret the validated IR with its initial values. */
+    private static function initialClosureValue(\Closure $closure, StateExpression $expression, bool $interpret = false): mixed
+    {
+        $state = []; $seen = new \SplObjectStorage();
+        $collect = static function (mixed $value) use (&$collect, &$state, $seen): void {
+            if ($value instanceof CollectionItem) { $collect($value->reference()); return; }
+            if ($value instanceof StateRef) { $state[$value->name] = $value->initial; return; }
+            if ($value instanceof \Closure && !$seen->contains($value)) {
+                $seen->attach($value);
+                foreach ((new \ReflectionFunction($value))->getStaticVariables() as $capture) $collect($capture);
+            } elseif (is_array($value)) foreach ($value as $part) $collect($part);
+        };
+        $collect($closure);
+        if ($state === [] && !$interpret) return $closure();
+        foreach (StateInterpolation::current() ?? [] as $reference) $collect($reference);
+        $initial = FrontendValueRuntime::initial(normalizeReactiveValue($expression), [...InlineStateRegistry::current(), ...$state]);
+        InitialTextValue::remember($expression, $initial);
+        return $initial;
     }
 
     private static function displayResult(mixed $expression, mixed $initial, array $source, bool $preserveArray = false, bool $forceExpression = false): mixed
     {
         if ($expression instanceof StateRef && !is_array($initial)) return $expression;
-        $payload = normalizeReactiveValue(['value' => $expression, 'functions' => self::$functions]);
+        $functions = self::explicitDisplayReads(self::$functions);
+        $payload = normalizeReactiveValue(['value' => $expression, 'functions' => $functions]);
         if (!$forceExpression && !str_contains(json_encode($payload, JSON_THROW_ON_ERROR), '"$state"')) return $initial;
         self::assertDisplayReadOnly($payload);
         if (is_array($initial) && !$preserveArray) {
@@ -117,9 +139,22 @@ trait FrontendDisplayCompiler
             foreach ($initial as $key => $value) $values[$key] = self::displayResult(new StateExpression('offset', $expression, $key), $value, $source);
             return $values;
         }
-        $expression = new StateExpression('display', $expression, ['functions' => self::$functions, 'source' => $source]);
+        $expression = new StateExpression('display', $expression, ['functions' => $functions, 'source' => $source]);
         InitialTextValue::remember($expression, $initial);
         return new DisplayValue($initial, $expression);
+    }
+
+    /** Expose conditional State reads to display, Style and list dependency tracking. */
+    private static function explicitDisplayReads(array $node): array
+    {
+        // Event instructions retain their public state shorthand. Read-only
+        // display functions use the equivalent expression operand instead.
+        if (($node['type'] ?? null) === 'condition' && isset($node['state'])) {
+            $node['left'] = ['$state' => $node['state']];
+            unset($node['state']);
+        }
+        foreach ($node as $key => $value) if (is_array($value)) $node[$key] = self::explicitDisplayReads($value);
+        return $node;
     }
 
     private static function assertDisplayReadOnly(mixed $node): void
@@ -201,7 +236,16 @@ trait FrontendDisplayCompiler
                     $binding = NaturalStateBindings::property($component, $name, self::$functionContext);
                     $field = NaturalStateBindings::inputProperty($component, $name, self::$functionContext);
                     $value = $binding ?? ($field !== null ? $field->getValue($component) : $component->__get($name));
-                    $value = $value instanceof DisplayValue ? $value->expression : ($value instanceof StateRef || $value instanceof StateExpression ? $value : self::literalValue($value));
+                    $value = $value instanceof DisplayValue ? $value->expression : ($value instanceof CollectionItem || $value instanceof StateRef || $value instanceof StateExpression ? $value : self::literalValue($value));
+                    $target = $binding instanceof DisplayValue ? $binding->writable : ($binding instanceof StateRef ? $binding : null);
+                    if ($target !== null && $field !== null && (!method_exists($field, 'hasHooks') || !$field->hasHooks())) {
+                        $property = $field->getDeclaringClass()->getName() . '::$' . $name;
+                        $rule = $field->getType() === null ? null : self::typeRule((string) $field->getType(), resolved: true);
+                        if ($rule !== null) $rule['property'] = $property;
+                        // Keep the constructor's read/type contract and the original
+                        // State address. Never qualify that address in the child scope.
+                        $value = new StateExpression('componentInput', $value, ['target' => $target, 'rule' => $rule, 'property' => $property, 'readonly' => $field->isReadOnly()]);
+                    }
                     $token = [...$token, 'id' => 'constant', 'text' => '[property]', 'constant' => $value];
                     $index += 2;
                 }

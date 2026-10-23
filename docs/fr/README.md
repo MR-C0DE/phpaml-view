@@ -10,6 +10,10 @@ La [matrice de compatibilité](compatibilite.md) réunit les fonctionnalités,
 leurs limites et le catalogue natif issu du registre Engine.
 
 Voir aussi : [textes réactifs dans les composants](textes-reactifs.md).
+Voir aussi : [Picker, Toggle et Calendar](controles.md).
+Voir aussi : [Icon et le catalogue Lucide optionnel](icones.md).
+Voir aussi : [listes IList et composants natifs](composants-natifs.md#listes-avec-ilist).
+Voir aussi : [styles PHP et modules CSS locaux](styles.md).
 Voir aussi : [niveau 9 — fichiers et données dans le navigateur](niveau-9-fichiers-donnees.md).
 
 ## Organisation d’une application
@@ -267,6 +271,25 @@ Les sélecteurs globaux restent dans `stylesheets/base.css`. Les styles des
 pages, composants, layouts et états utilisent des sélecteurs fondés sur des
 classes.
 
+Pour inclure une feuille, déclarez son import en haut du fichier de vue, avant
+la classe :
+
+```php
+use function AML\View\import;
+
+import('pages/home.css'); // relatif à src/views/stylesheets/
+```
+
+Seuls `stylesheets/base.css` et les fichiers CSS de `themes/` sont chargés
+automatiquement. Un `base.css` placé dans un sous-dossier nécessite lui aussi
+un import ; seul celui à la racine de `stylesheets/` est global.
+Les autres feuilles nécessitent un `import()`. Retirer le
+dernier import retire la feuille au prochain rechargement de page ou build de
+production, même si elle existe encore sur disque. Le fichier CSS généré reste
+global : une feuille importée par une autre vue continue donc de s’appliquer.
+Pour une application existante qui utilisait le chargement automatique de tout
+le dossier, ajoutez les imports aux pages, composants, layouts et états concernés.
+
 ## Exemple
 
 ```php
@@ -427,6 +450,50 @@ Le handle expose `dirty`, `touched`, `valid`, `invalid`, `submitting`,
 `submitted` et `error`. La validation native et distante reste la source de
 vérité. La réinitialisation restaure aussi les valeurs réactives liées.
 
+### State local
+
+`State()` crée un état réactif dans `body()` ou dans une méthode appelée pendant
+sa construction. Importer la fonction avec `use function AML\View\State;`.
+L'attribut `#[State]` reste disponible pour les propriétés de classe.
+
+```php
+$compteur = State(0);                         // type int déduit
+$nom = State('André');                        // type string déduit
+$date = State(null, type: '?string');         // type nullable explicite
+$choix = State(0, type: 'int|string');
+
+return VStack(
+    Text($compteur),
+    Button('+')->increments($compteur),
+    Button('Doubler')->sets($compteur, $compteur->times(2)),
+    Button('Réinitialiser')->sets($compteur, 0),
+    TextField('nom', $nom),
+    Text($nom),
+);
+```
+
+La variable contient une référence `AML\Engine\StateRef`. Les composants natifs,
+les formulaires et `Style` peuvent la recevoir directement. Un composant enfant
+peut la recevoir dans un paramètre `StateRef` et utiliser les mêmes actions pour
+modifier l'état du parent. Les actions conservent l'adresse d'origine.
+
+La valeur reste disponible entre les clics de cette instance et revient à sa
+valeur initiale quand le composant est recréé. Chaque appel crée un état distinct,
+identifié selon l'ordre de construction. Les types sont vérifiés à la création
+et lors des modifications. `State(null)` accepte seulement `null` ; préciser
+`type: '?string'`, par exemple, pour accepter ensuite une chaîne. Les valeurs
+acceptées sont les scalaires, `null` et les tableaux de ces valeurs, dans les
+limites numériques du navigateur.
+
+`$compteur++` et `$compteur = 3` ne modifient pas l'état réactif : utiliser
+`increments()`, `decrements()`, `sets()` ou `toggles()`. De même, capturer la
+référence dans une closure ne la transforme pas en variable scalaire.
+`$compteur->initial` donne uniquement la valeur initiale en PHP. Pour un texte
+composé, utiliser `Text($compteur->prefixedBy('Compteur : '))` ; `{compteur}` reste
+réservé aux propriétés du composant. Les déclarations locales se font pendant la
+construction, jamais dans un événement navigateur. Pour écrire naturellement
+`$this->compteur++` dans les closures, conserver une propriété `#[State]` typée.
+
 ### Reducer, contexte et références
 
 `Reducer()` convient à une valeur possédant plusieurs transitions nommées :
@@ -531,7 +598,11 @@ les régions live, les attributs ARIA et la navigation clavier des menus.
 Les formulaires disposent de `FileInput()` avec `UploadForm()`, de
 `ConditionalField()` et de `MultiStepForm()`. `->preserve('contact.draft')`
 conserve les valeurs ordinaires après une navigation ou une erreur serveur. Les
-champs fichiers sont exclus de cette conservation automatique. Une application
+champs fichiers, mots de passe, champs cachés ou désactivés, codes temporaires
+et champs de paiement sont exclus de cette conservation automatique. Les champs
+avec `->autocomplete('off')` sont également exclus : utilisez cette option pour
+les autres données sensibles. Les anciennes valeurs exclues sont supprimées du
+brouillon lors de sa restauration. Une application
 peut explicitement lire un fichier avec `BrowserFiles`, puis conserver le State
 résultant avec `#[Persisted]`.
 Après confirmation du serveur, utilisez
@@ -568,6 +639,12 @@ La commande `aml make:view-component Navigation` génère automatiquement la
 classe et sa factory. `FileApplication` charge les composants avant les pages
 et layouts. La forme générique `Component(Navigation::class)` et l’ancienne
 forme `new Navigation()` restent compatibles.
+
+Une propriété de constructeur recevant directement un State peut être modifiée
+dans un événement par `$this->a = '...'`. La modification rejoint le parent et
+les composants auxquels la propriété est transmise. Avec une valeur littérale
+ou par défaut, une propriété promue mutable conserve une valeur locale à chaque
+instance. Voir [les propriétés de composants](composants-props.md).
 
 ## Tester une vue
 

@@ -241,7 +241,9 @@ check('Public beta contract excludes the removed server runtime', function (): v
     foreach (['onServerClick', 'bind'] as $removedMethod) {
         expect(!method_exists(AML\View\Element::class, $removedMethod), "Removed method still exists: {$removedMethod}");
     }
-    expect(!function_exists('AML\\View\\state'), 'Removed state() helper still exists.');
+    // PHP function names are case-insensitive: State() now denotes a frontend
+    // reference, never the removed server-session state helper.
+    expect((string) (new ReflectionFunction('AML\\View\\State'))->getReturnType() === StateRef::class, 'State() must return a frontend reference.');
 });
 
 check('Text escapes unsafe HTML', function () use ($renderer): void {
@@ -2575,6 +2577,10 @@ check('top-level import associates safe stylesheets with view files', function (
     mkdir($root . '/stylesheets/components', 0777, true);
     file_put_contents($root . '/stylesheets/pages/home.css', '.home { color: navy; }');
     file_put_contents($root . '/stylesheets/components/badge.css', '.badge { font-weight: bold; }');
+    file_put_contents($root . '/stylesheets/pages/unused.css', '.unused { color: red; }');
+    file_put_contents($root . '/stylesheets/base.css', '.global-base { color: black; }');
+    mkdir($root . '/themes', 0777, true);
+    file_put_contents($root . '/themes/dark.css', '.global-theme { color: white; }');
     file_put_contents($root . '/components/Badge.php', <<<'PHP'
 <?php
 namespace ImportFixtures\Components;
@@ -2602,6 +2608,9 @@ PHP);
     ], 'Stylesheet imports were not associated or deduplicated correctly.');
     $styles = $application->styles();
     expect(str_contains($styles, '.home') && str_contains($styles, '.badge'), 'Imported stylesheets are missing from the application bundle.');
+    expect(!str_contains($styles, '.unused'), 'A stylesheet without import() leaked into the application bundle.');
+    expect(str_contains($styles, '.global-base') && str_contains($styles, '.global-theme'), 'Base styles or themes stopped being global.');
+    expect(substr_count($styles, '.home') === 1, 'A repeated import duplicated CSS in the bundle.');
 });
 
 check('top-level import rejects missing and unsafe stylesheets', function (): void {

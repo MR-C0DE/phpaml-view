@@ -10,7 +10,7 @@ final class StylesheetImports
     /** @var list<array{source: string, owner: string}> */
     private static array $contexts = [];
 
-    /** @var array<string, array<string, string>> */
+    /** @var array<string, array<string, array<string, string>>> */
     private static array $imports = [];
 
     public static function enter(string $source, string $owner): void
@@ -34,6 +34,12 @@ final class StylesheetImports
         }
 
         $path = str_replace('\\', '/', trim($path));
+        self::resolve($context['source'], $path);
+        self::$imports[$context['source']][$context['owner']][$path] = $path;
+    }
+
+    public static function resolve(string $source, string $path): string
+    {
         if (
             $path === ''
             || str_starts_with($path, '/')
@@ -45,7 +51,7 @@ final class StylesheetImports
             throw new \InvalidArgumentException("Invalid AML View stylesheet import: {$path}");
         }
 
-        $root = $context['source'] . '/stylesheets';
+        $root = $source . '/stylesheets';
         $file = $root . '/' . $path;
         $realRoot = realpath($root);
         $realFile = realpath($file);
@@ -57,7 +63,7 @@ final class StylesheetImports
             throw new \InvalidArgumentException("AML View stylesheet must stay inside src/views/stylesheets: {$path}");
         }
 
-        self::$imports[$context['source']][$context['owner']][$path] = $path;
+        return $realFile;
     }
 
     /** @return array<string, list<string>> */

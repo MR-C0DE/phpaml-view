@@ -156,12 +156,12 @@ final class CompositionPage extends Page
     }
 }
 
-final class InvalidInputWrite extends Component
+final class WritableInput extends Component
 {
     public function __construct(private string $message) {}
     public function body(): View
     {
-        return Button('Écrire')->onClick(function (): void { $this->message = 'Interdit'; });
+        return Button('Écrire')->onClick(function (): void { $this->message = 'Modifié'; });
     }
 }
 

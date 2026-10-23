@@ -28,12 +28,33 @@ trait FunctionEvaluation
         if (!is_array($node)) return false;
         if (isset($node['$local']) || isset($node['$state']) || isset($node['$collection'])) return true;
         $operation = $node['$expression']['operation'] ?? null;
-        return in_array($operation, ['dynamicLocal', 'objectProperty', 'objectStaticProperty'], true)
+        return in_array($operation, ['componentInput', 'dynamicLocal', 'objectProperty', 'objectStaticProperty'], true)
             || in_array($operation, ['offset', 'appendOffset'], true) && ($this->isReferenceTarget($node['$expression']['left']) || in_array($node['$expression']['left']['$expression']['operation'] ?? null, ['objectThis', 'objectCall', 'objectNew', 'call'], true));
     }
 
     private function functionReference(mixed $target, bool $unpack = false): array
     {
+        if (is_array($target) && ($target['$expression']['operation'] ?? null) === 'componentInput') {
+            $expression = $target['$expression']; $input = $expression['right'];
+            $parent = $this->functionReference($input['target']);
+            $writable = function () use ($input): void {
+                if ($this->displayReadOnly) throw new \Error('Reactive text cannot modify state');
+                if ($input['readonly']) throw new \Error('Cannot modify readonly property ' . $input['property']);
+            };
+            $reference = [
+                'embeddable' => false,
+                'get' => fn () => $this->resolveValue($expression['left']),
+                'set' => function ($value) use ($input, $parent, $writable) {
+                    $writable();
+                    $value = $this->functionContract($input['rule'], $value, $this->source['strictTypes'] ?? true);
+                    return ($parent['set'])($value);
+                },
+                'remove' => static fn () => throw new \Error('Cannot unset bound component property ' . $input['property']),
+            ];
+            $reference['acquire'] = static function () use ($writable, $reference) { $writable(); return ($reference['get'])(); };
+            $reference['reference'] = static function () use ($writable, $reference) { $writable(); return $reference; };
+            return $reference;
+        }
         if ($target instanceof TestResolvedValue && $target->reference !== null) return $target->reference;
         if ($target instanceof TestObject) return ['get' => static fn () => $target];
         if (($target['$expression']['operation'] ?? null) === 'dynamicLocal') $target = ['$local' => $this->dynamicLocalId($target['$expression']['left'])];

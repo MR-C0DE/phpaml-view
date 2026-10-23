@@ -29,6 +29,7 @@ final class SettingsPage extends Page
                 Copy::text('appearance') => VStack(Text(Copy::text('appearance.copy')), ThemeSwitcher('light', 'dark', 'system')->class('theme-switcher', 'settings-theme-switcher')),
                 Copy::text('language') => VStack(Text(Copy::text('language.copy')), Link('English', '/settings?lang=en')->class('button', 'button-secondary'), Link('Français', '/settings?lang=fr')->class('button', 'button-secondary')),
             ], 'Application settings')->class('settings-tabs'),
+            Link('Picker, Toggle et calendrier', '/controls')->class('button', 'button-secondary'),
         )->class('section', 'shell'));
     }
 }

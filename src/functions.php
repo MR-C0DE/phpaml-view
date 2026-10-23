@@ -12,9 +12,20 @@ use AML\Engine\ClientInstruction;
 use AML\Engine\NavigationAction;
 use Closure;
 
+/** Create a typed reactive reference owned by the component currently being built. */
+function State(mixed $initial, ?string $type = null): StateRef
+{
+    $id = InlineStateRegistry::nextId('state');
+    $target = \AML\Engine\StateNamespace::qualify('__locals.' . $id);
+    $rule = InlineStateType::rule($initial, $type, $target);
+    $initial = InlineStateType::initial($initial, $rule);
+    InlineStateRegistry::register($target, $initial, $rule);
+    return StateRef::to($target, $initial);
+}
+
 /**
- * Associate a stylesheet with the page, component, layout, or state file that
- * declares it. Paths are relative to src/views/stylesheets.
+ * Include a stylesheet in the application bundle and associate it with the
+ * declaring view file. Paths are relative to src/views/stylesheets.
  */
 function import(string $path): void
 {
@@ -31,6 +42,12 @@ function Text(mixed $content): Element
     $content = NaturalStateBindings::resolve(__FUNCTION__, $content);
     $view = TextContent::view($content, true);
     return $view instanceof Element ? $view : new Element('span', $view);
+}
+
+/** A local Lucide SVG; install the optional catalogue with aml install lucide. */
+function Icon(mixed $name): IconElement
+{
+    return new IconElement($name instanceof \Closure ? $name : NaturalStateBindings::resolve(__FUNCTION__, $name));
 }
 
 /** @internal */
@@ -117,6 +134,19 @@ function Heading(mixed $content, int $level = 1): HeadingView
 function Group(View ...$children): GroupView
 {
     return new GroupView(...$children);
+}
+
+/** Optional functional-view root; groups children without adding an HTML body. */
+function body(View ...$children): GroupView
+{
+    return new GroupView(...$children);
+}
+
+/** Native unordered/ordered list of views, scalar items, records or a reactive array. */
+function IList(mixed ...$items): IListView
+{
+    $items = NaturalStateBindings::resolveArguments(__FUNCTION__, $items, true);
+    return new IListView(...$items);
 }
 
 function Each(StateRef $items, string $label = 'label', string $key = 'id', ?Closure $render = null): ListView
@@ -534,10 +564,17 @@ function safeLinkHref(string $href): string
     return $href;
 }
 
-function Link(mixed $label, string $href): Element
+function Link(mixed $label, string|StateRef|DisplayValue|\Closure $href): Element
 {
-    $label = NaturalStateBindings::resolve(__FUNCTION__, $label, 0);
-    return (new Element('a', textValue($label)))->attribute('href', safeLinkHref($href));
+    [$label, $href] = NaturalStateBindings::resolveArguments(__FUNCTION__, [$label, $href]);
+    if ($href instanceof \Closure) {
+        $href = FrontendClosureCompiler::displayClosure($href);
+        if ($href instanceof \Closure) $href = $href();
+    }
+    $initial = $href instanceof StateRef || $href instanceof DisplayValue ? $href->initial : $href;
+    if (!is_string($initial)) throw new \InvalidArgumentException('A link URL must be a string.');
+    return (new Element('a', textValue($label)))->attribute('href', safeLinkHref($initial))
+        ->attribute('data-aml-href', $href instanceof StateRef || $href instanceof DisplayValue ? json_encode(normalizeReactiveValue($href instanceof DisplayValue ? $href->expression : $href), JSON_THROW_ON_ERROR) : null);
 }
 
 function ExternalLink(mixed $label, string $href): Element
@@ -1160,6 +1197,15 @@ function DateInput(string $name = '', string|StateRef|null $value = null): Eleme
     return Input($name, 'date', $value);
 }
 
+/** A native date field enhanced with an inline monthly calendar by Engine. */
+function Calendar(string $name = '', string|StateRef|null $value = null, string $locale = 'en', int $firstDayOfWeek = 1): CalendarElement
+{
+    $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
+    $calendar = new CalendarElement($locale, $firstDayOfWeek);
+    if ($name !== '') $calendar->name($name);
+    return $calendar->value($value);
+}
+
 function SearchInput(string $name = '', string|StateRef|null $value = null): Element
 {
     $value = NaturalStateBindings::resolve(__FUNCTION__, $value, 1);
@@ -1229,6 +1275,16 @@ function Checkbox(string $name = '', bool|StateRef $checked = false, string $val
     return $input->value($checked);
 }
 
+/** An accessible on/off control using the existing checkbox form contract. */
+function Toggle(string $name = '', bool|StateRef $checked = false, string $value = '1'): Element
+{
+    $checked = NaturalStateBindings::resolve(__FUNCTION__, $checked, 1);
+    if ($checked instanceof StateRef && !is_bool($checked->initial)) {
+        throw new \InvalidArgumentException('Toggle state must contain a boolean.');
+    }
+    return Checkbox($name, $checked, $value)->attribute('role', 'switch')->class('aml-toggle');
+}
+
 /** @param array<string|int, string> $options */
 function Select(string $name, array $options, string|int|StateRef|null $selected = null): Element
 {
@@ -1244,6 +1300,13 @@ function Select(string $name, array $options, string|int|StateRef|null $selected
     return (new Element('select', ...$choices))
         ->attribute('name', $name)
         ->value($selected);
+}
+
+/** @param array<string|int, string> $options */
+function Picker(string $name, array $options, string|int|StateRef|null $selected = null): Element
+{
+    [$options, $selected] = array_values(NaturalStateBindings::resolveArguments(__FUNCTION__, [1 => $options, 2 => $selected]));
+    return Select($name, $options, $selected)->class('aml-picker');
 }
 
 function Option(string $value, mixed $label = null, bool $selected = false): Element

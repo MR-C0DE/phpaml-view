@@ -35,6 +35,10 @@ trait NaturalStateForms
             if (isset((StateInterpolation::current() ?? [])[$name]) && (!property_exists($component, $name) || (new \ReflectionProperty($component, $name))->getAttributes(State::class) === [])) return null;
             $index = 3;
         } elseif (($tokens[0]['id'] ?? null) === T_VARIABLE) $value = $locals[substr($tokens[0]['text'], 1)] ?? null;
+        if ($value instanceof CollectionItem && $value->reference() !== null && in_array(count($tokens), [6, 8], true) && ($tokens[1]['text'] ?? '') === '->'
+            && in_array($tokens[2]['text'] ?? '', ['value', 'state'], true) && ($tokens[4]['id'] ?? null) === T_CONSTANT_ENCAPSED_STRING) {
+            return $value->state(stripcslashes(substr($tokens[4]['text'], 1, -1)));
+        }
         $reference = $value instanceof StateRef ? $value : ($value instanceof DisplayValue ? $value->writable : null);
         if ($reference === null) return null;
         $path = $reference->name; $initial = $reference->initial;
@@ -114,8 +118,8 @@ trait NaturalStateForms
     {
         return match (strtolower($call)) {
             'value' => $key === 0,
-            'input', 'select' => $key === 2,
-            'textfield', 'emailinput', 'numberinput', 'dateinput', 'searchinput', 'hiddeninput', 'textarea', 'checkbox' => $key === 1,
+            'input', 'select', 'picker' => $key === 2,
+            'textfield', 'emailinput', 'numberinput', 'dateinput', 'searchinput', 'hiddeninput', 'textarea', 'checkbox', 'toggle', 'calendar' => $key === 1,
             default => false,
         };
     }

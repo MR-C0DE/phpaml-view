@@ -43,13 +43,19 @@ final class FrontendImports
         }
         $line = $function->getStartLine();
         if (isset(self::$cache[$file]['entries'][$line])) return self::$cache[$file]['entries'][$line];
+        return self::$cache[$file]['entries'][$line] = self::forSource($source, $line);
+    }
+
+    /** @internal Imports at a declaration before its source has been loaded. */
+    public static function forSource(string $source, int $line): array
+    {
         $tokens = token_get_all($source);
         $imports = ['class' => [], 'const' => [], 'function' => []];
         $depth = 0;
         $namespaceDepth = 0;
         for ($index = 0; $index < count($tokens); $index++) {
             $token = $tokens[$index];
-            if (is_array($token) && $token[2] > $function->getStartLine()) break;
+            if (is_array($token) && $token[2] > $line) break;
             if ($token === '{' || (is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) $depth++;
             if ($token === '}') $depth--;
             if (is_array($token) && $token[0] === T_NAMESPACE) {
@@ -92,7 +98,7 @@ final class FrontendImports
                 $imports[$itemKind][$itemKind !== 'const' ? strtolower($alias) : $alias] = $name;
             }
         }
-        return self::$cache[$file]['entries'][$line] = $imports;
+        return $imports;
     }
 
     public static function qualify(string $name, string $namespace, array $imports, string $kind): string

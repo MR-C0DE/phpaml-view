@@ -1,0 +1,3 @@
+.fallback { color: blue !important; width: 140px; }
+.pseudo::before { content: "Priority "; color: blue !important; }
+.spacing { padding: 7px; }

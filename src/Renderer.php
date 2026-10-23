@@ -10,7 +10,11 @@ final class Renderer
 {
     public function render(View $view): string
     {
-        return $this->isolated(static fn (): string => $view->render(new RenderContext()));
+        return $this->isolated(static function () use ($view): string {
+            $context = new RenderContext();
+            $html = $view->render($context);
+            return $context->styles() . $html;
+        });
     }
 
     public function renderPage(Page $page, ?Layout $layout = null): string
@@ -19,7 +23,11 @@ final class Renderer
             return $this->render($page);
         }
 
-        return $this->isolated(static fn (): string => $layout->render((new RenderContext())->withContent($page)));
+        return $this->isolated(static function () use ($layout, $page): string {
+            $context = (new RenderContext())->withContent($page);
+            $html = $layout->render($context);
+            return $context->styles() . $html;
+        });
     }
 
     private function isolated(callable $render): string

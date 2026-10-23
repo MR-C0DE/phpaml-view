@@ -7,8 +7,10 @@ namespace App\Views\Layouts;
 use App\Support\Copy;
 use AML\View\Layout;
 use AML\View\View;
-use function AML\View\{ContextProvider, Element, Group, Slot, Text, ThemeProvider};
+use function AML\View\{ContextProvider, Element, Group, import, Slot, Text, ThemeProvider};
 use function App\Views\Components\Navigation;
+
+import('pages/tasks.css');
 
 final class AppLayout extends Layout
 {

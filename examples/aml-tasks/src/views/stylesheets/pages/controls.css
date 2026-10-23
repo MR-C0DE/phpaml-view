@@ -1,0 +1,34 @@
+/* Explicitly imported by pages/controls/page.php. Scope examples to this page. */
+.controls-page h1 { max-width: 16ch; font-size: clamp(2.5rem, 5vw, 4.5rem); }
+.controls-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; margin-top: 2rem; align-items: start; }
+.controls-form, .controls-summary { padding: 1.5rem; border: 1px solid var(--line); border-radius: 1.25rem; background: var(--surface); }
+.controls-form { display: grid; gap: 1rem; }
+.controls-summary h2 { font-size: 1.7rem; }
+.controls-form label { font-weight: 700; }
+.controls-form select, .controls-form input[type=date] { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: .65rem; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--muted); border-radius: .5rem; }
+.controls-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 44px; }
+.controls-page .aml-toggle { appearance: none; -webkit-appearance: none; flex: none; width: 48px; height: 28px; margin: 0; padding: 3px; border: 1px solid var(--muted); border-radius: 999px; background: var(--surface-soft); cursor: pointer; }
+.controls-page .aml-toggle::before { content: ''; display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--muted); }
+.controls-page .aml-toggle:checked { background: var(--violet-deep); border-color: var(--violet-deep); }
+.controls-page .aml-toggle:checked::before { transform: translateX(20px); background: #fff; }
+.controls-page .aml-toggle:disabled { cursor: default; opacity: .5; }
+.controls-page .aml-calendar-panel { margin-top: .75rem; }
+.controls-page .aml-calendar-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.controls-page .aml-calendar-month { font-weight: 700; text-transform: capitalize; }
+.controls-page .aml-calendar-grid { width: 100%; table-layout: fixed; border-spacing: 2px; text-align: center; }
+.controls-page .aml-calendar-grid th { padding-block: .75rem; font-size: .8rem; color: var(--muted); }
+.controls-page .aml-calendar button { min-width: 34px; min-height: 40px; padding: .25rem; font: inherit; border: 1px solid transparent; border-radius: .5rem; color: var(--ink); background: transparent; cursor: pointer; }
+.controls-page .aml-calendar-grid button { width: 100%; }
+.controls-page .aml-calendar button:hover:not(:disabled) { background: var(--surface-soft); }
+.controls-page .aml-calendar [aria-selected=true] button,
+.controls-page .aml-calendar [aria-selected=true] button:hover:not(:disabled) { color: #fff; background: var(--violet-deep); }
+.controls-page .aml-calendar [aria-current=date] { border-color: var(--muted); }
+.controls-page .aml-calendar button:disabled { color: var(--muted); opacity: .45; cursor: default; }
+.controls-page :focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
+.controls-page [hidden] { display: none !important; }
+@media (max-width: 760px) { .controls-layout { grid-template-columns: minmax(0, 1fr); } .controls-form, .controls-summary { padding: .8rem; } }
+@media (forced-colors: active) {
+  .controls-page .aml-toggle { appearance: auto; -webkit-appearance: auto; }
+  .controls-page .aml-toggle::before { display: none; }
+  .controls-page .aml-calendar [aria-selected=true] button { border: 2px solid Highlight; }
+}

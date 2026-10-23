@@ -13,7 +13,14 @@ trait ControlFlowEvaluation
 
     private function iteration(int $count, int $limit): void
     {
-        if ($count > $limit || --$this->loopBudget < 0) throw new \RangeException('Frontend loop exceeds its safe iteration limit');
+        $perLoop = $count > $limit;
+        if ($perLoop || --$this->loopBudget < 0) {
+            $message = $perLoop
+                ? "Frontend loop exceeds its safe iteration limit ({$limit} iterations per loop)."
+                : 'Frontend execution exceeds its total iteration limit (10000 iterations shared by all loops).';
+            if ($this->source !== null) $message .= " [PHP {$this->source['file']}:{$this->source['line']}]";
+            throw new \RangeException($message);
+        }
     }
 
     private function bindPattern(array $bindings, mixed $value, mixed $source = null): void
@@ -183,6 +190,7 @@ trait ControlFlowEvaluation
 
     private function unsetExpression(array $target): void
     {
+        if (($target['$expression']['operation'] ?? null) === 'componentInput') { ($this->functionReference($target)['remove'])(); return; }
         if (($target['$expression']['operation'] ?? null) === 'objectStaticProperty') { ($this->staticPropertyReference($target['$expression'])['remove'])(); return; }
         if (($target['$expression']['operation'] ?? null) === 'objectProperty') { ($this->objectPropertyReference($target['$expression'])['remove'])(); return; }
         if (isset($target['$local'])) { unset($this->locals[$target['$local']], $this->localReferences[$target['$local']]); return; }

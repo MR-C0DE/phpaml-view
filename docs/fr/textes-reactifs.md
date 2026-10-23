@@ -198,6 +198,13 @@ conversion inverse. Les propriétés `#[Computed]` ne sont pas des cibles
 d'écriture. Les States propres aux enfants restent isolés, même si deux champs
 ou deux instances démarrent avec la même valeur.
 
+Les événements peuvent aussi écrire directement dans une prop mutable liée :
+`$this->nom = 'Marie'`. L'adresse du State d'origine est conservée à travers
+les composants imbriqués. Une prop promue mutable initialisée par une valeur
+littérale ou par défaut garde une valeur locale à son instance. Voir le
+[guide des propriétés de composants](composants-props.md) pour un exemple
+complet avec `Carte()`, les types et les limites d'écriture.
+
 Les fonctions réactives emploient la grammaire frontend des niveaux 1 à 8 : elles peuvent calculer, utiliser des variables locales, appeler d'autres fonctions chargées et effectuer une récursion bornée. Elles doivent rester en lecture seule. Les écritures d'état, sorties console, références de paramètres/captures et appels non pris en charge sont refusés. Générer une valeur aléatoire dans un événement puis l'enregistrer dans un état. Les instructions uniques sans accolades sont également compilées.
 
 `{message}` est une syntaxe de modèle du composant. Pour fournir une valeur à un service, écrire `formater($this->message)` ou utiliser l'interpolation PHP. Les modèles passés à une fonction utilisateur ne sont pas un remplacement général du langage PHP.

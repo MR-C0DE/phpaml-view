@@ -12,6 +12,7 @@ final class NaturalStateBindings
     use NaturalStateComponents;
     use NaturalStateForms;
     use NaturalStateConstruction;
+    use NaturalStyleBindings;
     private static array $contexts = [];
     private static array $cache = [];
 
@@ -35,19 +36,22 @@ final class NaturalStateBindings
         return self::resolveArguments($call, [$argument => $initial])[$argument];
     }
 
-    public static function resolveArguments(string $call, array $values, bool $variadic = false, ?\ReflectionMethod $constructor = null): array
+    public static function resolveArguments(string $call, array $values, bool $variadic = false, ?\ReflectionMethod $constructor = null, ?string $methodClass = null, ?\ReflectionFunction $function = null): array
     {
-        if ($constructor !== null) $values = self::constructorLocals($constructor, $values);
+        if ($constructor !== null || $function !== null) $values = self::constructorLocals($constructor ?? $function, $values);
         $id = self::executionId(); $index = array_key_last(self::$contexts[$id] ?? []);
         if ($index === null) return $values;
         $context = &self::$contexts[$id][$index];
         $component = $context['component'];
         $call = str_contains($call, '\\') ? substr($call, strrpos($call, '\\') + 1) : $call;
+        $fullCall = $function?->getName() ?? 'AML\\View\\' . $call;
         $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 30);
         $frame = null; $caller = null;
         foreach ($trace as $position => $candidate) {
             $name = $candidate['function'] ?? '';
-            if (strcasecmp($name, 'AML\\View\\' . $call) !== 0 && !($call === 'value' && $name === 'value' && is_a($candidate['class'] ?? '', Element::class, true))) continue;
+            if ($methodClass !== null) {
+                if (strcasecmp($name, $call) !== 0 || !is_a($candidate['class'] ?? '', $methodClass, true) || str_starts_with($candidate['file'] ?? '', __DIR__ . '/')) continue;
+            } elseif (strcasecmp($name, $fullCall) !== 0 && !($call === 'value' && $name === 'value' && is_a($candidate['class'] ?? '', Element::class, true))) continue;
             if (($candidate['file'] ?? '') === __DIR__ . '/functions.php' || empty($candidate['file'])) return $values;
             $frame = $candidate; $caller = $trace[$position + 1] ?? []; $callerPosition = $position + 1; break;
         }
@@ -55,15 +59,18 @@ final class NaturalStateBindings
         $reflection = new \ReflectionMethod($component, 'body');
         if (isset($caller['class'], $caller['function']) && method_exists($caller['class'], $caller['function'])) $reflection = new \ReflectionMethod($caller['class'], $caller['function']);
         elseif (isset($caller['function']) && function_exists($caller['function'])) $reflection = new \ReflectionFunction($caller['function']);
+        $reflection = IListRowContext::reflection($caller ?? []) ?? $reflection;
         $tokens = self::tokens($frame['file']);
-        $namespace = $reflection instanceof \ReflectionMethod ? $reflection->getDeclaringClass()->getNamespaceName() : $reflection->getNamespaceName();
+        $namespace = FrontendImports::namespaceForFunction($reflection);
         $imports = FrontendImports::forFunction($reflection);
         $matches = [];
         foreach ($tokens as $position => $token) {
             if ($token['line'] !== $frame['line'] || ($tokens[$position + 1]['text'] ?? '') !== '(') continue;
             if (!in_array($token['id'], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE, T_VARIABLE], true)) continue;
             $method = ($tokens[$position - 1]['id'] ?? null) === T_OBJECT_OPERATOR;
-            if ($call === 'value') { if (!$method || strcasecmp($token['text'], 'value') !== 0) continue; }
+            if ($methodClass !== null) {
+                if ((!$method && ($tokens[$position - 1]['id'] ?? null) !== T_DOUBLE_COLON) || strcasecmp($token['text'], $call) !== 0) continue;
+            } elseif ($call === 'value') { if (!$method || strcasecmp($token['text'], 'value') !== 0) continue; }
             else {
                 if ($method || ($tokens[$position - 1]['id'] ?? null) === T_DOUBLE_COLON) continue;
                 if ($token['id'] === T_VARIABLE) {
@@ -71,10 +78,10 @@ final class NaturalStateBindings
                     if (count($factory) === 4 && ($factory[1]['text'] ?? '') === '(' && ($factory[2]['text'] ?? '') === '...') $factoryName = FrontendImports::qualify($factory[0]['text'], $namespace, $imports, 'function');
                     elseif (count($factory) === 1 && ($factory[0]['id'] ?? null) === T_CONSTANT_ENCAPSED_STRING) $factoryName = trim($factory[0]['text'], "'\"");
                     else continue;
-                    if (strcasecmp(ltrim($factoryName, '\\'), 'AML\\View\\' . $call) !== 0) continue;
+                    if (strcasecmp(ltrim($factoryName, '\\'), $fullCall) !== 0) continue;
                 }
                 $name = FrontendImports::qualify($token['text'], $namespace, $imports, 'function');
-                if ($token['id'] !== T_VARIABLE && strcasecmp($name, 'AML\\View\\' . $call) !== 0) continue;
+                if ($token['id'] !== T_VARIABLE && strcasecmp($name, $fullCall) !== 0) continue;
             }
             [$arguments, $end] = self::arguments($tokens, $position + 1);
             $matches[] = ['arguments' => $arguments, 'position' => $position, 'end' => $end, 'dynamic' => $token['id'] === T_VARIABLE];
@@ -94,6 +101,10 @@ final class NaturalStateBindings
             }
         }
         $match = $matches[$position % count($matches)];
+        if ($function !== null) {
+            $locals = self::callerLocals($trace, $callerPosition, $reflection, $component);
+            return self::bindArguments($match['arguments'], $function, $reflection, $component, $values, $tokens, $match['position'], $locals);
+        }
         if ($constructor !== null) {
             $parts = $match['arguments'];
             if (($parts[0][0]['text'] ?? '') === '...') {
@@ -108,7 +119,7 @@ final class NaturalStateBindings
             $locals = self::callerLocals($trace, $callerPosition, $reflection, $component);
             return self::bindArguments(array_values($parts), $constructor, $reflection, $component, $values, $tokens, $match['position'], $locals);
         }
-        $parameters = $call === 'value' ? ['value'] : array_map(static fn ($p) => $p->getName(), (new \ReflectionFunction('AML\\View\\' . $call))->getParameters());
+        $parameters = $methodClass !== null ? array_map(static fn ($p) => $p->getName(), (new \ReflectionMethod($methodClass, $call))->getParameters()) : ($call === 'value' ? ['value'] : array_map(static fn ($p) => $p->getName(), (new \ReflectionFunction('AML\\View\\' . $call))->getParameters()));
         $arguments = [];
         foreach ($match['arguments'] as $key => $part) {
             if (($part[1]['text'] ?? '') === ':') {
@@ -117,7 +128,7 @@ final class NaturalStateBindings
             $arguments[$key] = $part;
         }
         $locals = self::callerLocals($trace, $callerPosition, $reflection, $component);
-        $aliases = self::aliases($tokens, $match['position'], $reflection->getStartLine());
+        $aliases = self::aliases($tokens, $match['position'], $reflection->getStartLine(), $methodClass !== null);
         if ($variadic && array_filter($arguments, static fn ($part) => ($part[0]['id'] ?? null) === T_ELLIPSIS)) {
             $part = [['id' => '[', 'text' => '[', 'line' => $frame['line']]];
             foreach ($arguments as $key => $argument) {
@@ -134,14 +145,31 @@ final class NaturalStateBindings
             }
         }
         foreach ($values as $key => $initial) {
-            if ($initial instanceof View || $initial instanceof DisplayValue || $initial instanceof StateRef || $initial instanceof \AML\Engine\StateExpression || $initial instanceof \AML\Engine\StateConditional) continue;
+            if ($initial instanceof Style || $initial instanceof View || $initial instanceof DisplayValue || $initial instanceof StateRef || $initial instanceof \AML\Engine\StateExpression || $initial instanceof \AML\Engine\StateConditional) continue;
             $part = $arguments[$key] ?? null;
             if ($part === null) continue;
+            if ($initial instanceof \Closure && ($methodClass === null && strcasecmp($call, 'IList') === 0 && count($values) === 1 || $methodClass === IListView::class && $call === 'items')) continue;
+            $collectionSource = is_array($initial) && (
+                $methodClass === null && strcasecmp($call, 'IList') === 0 && count($values) === 1
+                || $methodClass === IListView::class && $call === 'items'
+            );
+            if ($methodClass !== null && is_array($initial) && !$collectionSource) {
+                $values[$key] = self::styleTree($initial, $part, $tokens, $match['position'], $reflection, $component, $aliases, $locals);
+                continue;
+            }
             $argumentLocals = $initial instanceof \Closure ? [...$locals, ...(new \ReflectionFunction($initial))->getStaticVariables()] : $locals;
             [$part, $program] = $initial instanceof \Closure ? [self::expand($part, $aliases, $argumentLocals), []]
                 : self::displayParts($tokens, $match['position'], $reflection, $part, $aliases, $argumentLocals);
             $states = StateInterpolation::current() ?? [];
-            if (self::isFormArgument($call, $key)) {
+            if ($collectionSource) {
+                $reference = self::writableInput($part, $component, $argumentLocals, $program);
+                if ($reference !== null) $values[$key] = $reference;
+                elseif (self::mentionsState([...$program, ...$part], $states, $component) || self::reactiveLocals($argumentLocals)) {
+                    $values[$key] = FrontendClosureCompiler::displayExpression($part, $reflection, $component, $initial, $argumentLocals, $program, preserveArray: true);
+                }
+                continue;
+            }
+            if ($methodClass === null && self::isFormArgument($call, $key)) {
                 $reference = self::writableInput($part, $component, $argumentLocals, $program);
                 if ($reference !== null) $values[$key] = $reference;
                 elseif (self::mentionsState([...$program, ...$part], $states, $component) || self::reactiveLocals($argumentLocals)) {
@@ -155,7 +183,10 @@ final class NaturalStateBindings
             // PHP has already evaluated static labels. Keep explicit closures and any
             // component access on the compiler path, even when its dependency is indirect.
             if (!$mentionsState && !$initial instanceof \Closure && !in_array('$this', array_column([...$program, ...$part], 'text'), true)) continue;
-            try { $values[$key] = FrontendClosureCompiler::displayExpression($part, $reflection, $component, $initial, $argumentLocals, $program); }
+            try {
+                $values[$key] = FrontendClosureCompiler::displayExpression($part, $reflection, $component, $initial, $argumentLocals, $program);
+                if ($methodClass !== null && $initial instanceof \Closure && $values[$key] instanceof TextView) $values[$key] = $initial();
+            }
             catch (\Throwable $error) {
                 if ($mentionsState) throw new \InvalidArgumentException('Cannot bind reactive text: ' . $error->getMessage() . (str_contains($error->getMessage(), 'Undefined frontend local') ? ' Use a read-only arrow function to capture local values.' : ''), previous: $error);
             }
@@ -176,7 +207,7 @@ final class NaturalStateBindings
 
     private static function reactiveLocals(array $locals): bool
     {
-        return (bool) array_filter($locals, static fn ($value) => $value instanceof StateRef || $value instanceof DisplayValue || $value instanceof \AML\Engine\StateExpression);
+        return (bool) array_filter($locals, static fn ($value) => $value instanceof CollectionItem && $value->reference() !== null || $value instanceof StateRef || $value instanceof DisplayValue || $value instanceof \AML\Engine\StateExpression);
     }
 
     private static function tokens(string $file): array
@@ -199,7 +230,7 @@ final class NaturalStateBindings
         return [[], $open];
     }
 
-    private static function aliases(array $tokens, int $before, int $startLine): array
+    private static function aliases(array $tokens, int $before, int $startLine, bool $preserve = false): array
     {
         $aliases = []; $depth = 0; $body = false;
         for ($i = 0; $i < $before; $i++) {
@@ -222,7 +253,7 @@ final class NaturalStateBindings
                 if (in_array($tokens[$j]['id'], [')', ']', '}'], true)) $nest--;
                 $part[] = $tokens[$j];
             }
-            if ($j < $before) { $aliases[$name] = self::expand($part, $aliases, []); $i = $j; }
+            if ($j < $before) { $aliases[$name] = $preserve ? $part : self::expand($part, $aliases, []); $i = $j; }
         }
         return $aliases;
     }

@@ -2,6 +2,109 @@
 
 All notable changes follow Semantic Versioning.
 
+## Unreleased
+
+## 0.1.0-beta.14 — 2026-10-23
+
+- Serialize completed compiler blocks once per compilation, preserving the
+  instruction format and source locations while reducing deep-nesting cost.
+  Keep the JSON depth protection and report its precise limit and PHP origin.
+  Cover nested conditions/loops and failure recovery in PHP, Core, browser and
+  installed-package tests; add actual Safari verification to CI.
+
+- Add native Icon() with an optional Lucide catalogue: inline SVG, reactive names,
+  labels and Style values, functional StateRef closures and keyed IList rows.
+  Validate inert geometry and retain existing component APIs.
+  Reject negative size/stroke values at initial rendering and in reactive
+  bindings, retain the last valid dimensions on error and accept zero.
+  Preserve State dependencies used only by nested if/elseif/else in read-only
+  Icon closures, including local StateRef, size and labels. Keep static closures
+  working and hide showWhen SVGs before Engine starts without replacing styles.
+  The event instruction format and existing component APIs remain unchanged.
+
+- Complete IList row field bindings across display, style, safe links, child
+  props, nested lists and editable controls. Resolve writes by stable keys,
+  support explicit editable projection sources, preserve child state on reorder
+  and release it on removal. Bind presentation options to State and retain the
+  last valid list on invalid direct or calculated data; keep legacy Each behavior.
+
+- Support reactive calculated IList sources, including filters, maps, helpers,
+  local programs and closure sources. Render initial projections with the shared
+  bounded PHP interpreter; track source dependencies in Engine. Accept StateRef
+  captures in frontend closures while preserving ownership, nested captures,
+  type validation, ordinary value captures and read-only display contracts.
+
+- Add fluent `IList()` for native unordered/ordered lists, numbering, markers,
+  static views and reactive arrays, direct State binding, custom row content,
+  empty placeholders and accessible reordering. Reuse Element styling and
+  the existing collection runtime; keep existing list factories compatible.
+
+- Discover function pages and components returning `View`, with optional `body()`
+  grouping, local State, typed/default/named props and per-instance effects.
+  Reuse class render/navigation lifecycles, preserve reactive props across both
+  forms, and retain original PHP source locations and CSS module paths. Keep
+  existing class pages, layouts and handwritten component factories compatible.
+
+- Add component-local `State()` references with inferred or explicit types,
+  nullable/union checks and isolated lifetimes. Accept references in button
+  mutation helpers, forms and reactive styles; retain their owner when passed
+  to child components. Keep property attributes and existing hook APIs intact.
+
+- Harden HTML tag names, URL attributes and script source setters. Reject active
+  document attributes while retaining ordinary links and passive media previews.
+  Add regression coverage for server rendering and the browser security lab.
+
+- Generate same-name component functions from their constructors during file
+  application discovery, preserving types, defaults, named/variadic arguments,
+  references, inheritance and reactive State forwarding. Keep handwritten
+  factories and avoid executing object defaults during discovery or binding.
+
+- Allow component events to assign directly to typed constructor props backed
+  by parent State, preserving nested forwarding, instance isolation and errors.
+  Give mutable promoted literal/default props instance-local values so the same
+  named factory works with `Carte()`, `Carte('Hello')` and `Carte($this->name)`.
+
+- Finalize existing Style behavior: preserve reactive `!important`, clear empty
+  declarations without masking other CSS rules, reject unbalanced values and
+  retain the last valid value on update failures. Apply CSS-wide keywords to
+  their target declarations and document reactive keyframe limits. Synchronize TestView style
+  values, priorities and recoverable diagnostics without simulating CSS layout.
+
+- Add PHP Style `supports()`, `container()`, native form/structural selectors,
+  pseudo-elements and isolated `keyframes()`, preserving reactive property
+  values throughout nested variants and animation steps. Share animation name
+  scoping with CSS modules. Preserve `<` in CSS range queries while escaping
+  HTML style end tags.
+
+- Bind Style property values automatically to State across direct modifiers,
+  fluent styles, named maps, compositions and scoped CSS custom properties.
+  Preserve initial HTML, immutable reuse and instance isolation; update hover,
+  media and conditional content in place, with recoverable style diagnostics.
+
+- Add immutable `Style::create()` / `Style::make()` fluent styles, named PHP
+  style maps, ordered PHP style composition and local `.style.css` / `.module.css`
+  modules. Preserve direct modifiers and `style(property, value)`. Scope module
+  classes and keyframes; collect CSS once per render, including conditional
+  templates, and keep it with the page through client navigation.
+
+- Add Picker and Toggle with existing native form behavior, natural State bindings
+  and child component writes. Add Calendar with civil-date selection, keyboard
+  navigation, English/French labels, native validation and min/max/step rules.
+- Add a styled `/controls` application page and document the form contracts;
+  require Engine `^0.1.0-beta.10` for the calendar runtime.
+
+- Make CSS imports control bundle inclusion: exclude unimported stylesheets,
+  retaining global base CSS and themes. Collect state imports without rendering
+  states, deduplicate shared files, and report missing imported stylesheets.
+  Existing applications must explicitly import non-global CSS; removing the
+  final import takes effect after reload or production rebuild.
+- Restore status-owned disabled and accessibility attributes when leaving Loading;
+  preserve explicit disabling. Apply chained Select values to server-rendered
+  options without mutating shared option elements.
+- Document native component method contracts, loading feedback, form values,
+  event replacement and validation. Add PHP and browser regression fixtures for
+  the existing APIs.
+
 ## 0.1.0-beta.13 — 2026-10-16
 
 - Correct PHP 8.2/8.3 compatibility for negative array indices, Generator

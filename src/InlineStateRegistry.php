@@ -13,11 +13,15 @@ final class InlineStateRegistry
     /** @var array<string, list<int>> */
     private static array $counters = [];
 
+    /** @var array<string, list<array<string, array>>> */
+    private static array $typeRules = [];
+
     public static function enter(): void
     {
         $execution = self::executionId();
         self::$contexts[$execution][] = [];
         self::$counters[$execution][] = 0;
+        self::$typeRules[$execution][] = [];
     }
 
     public static function nextId(string $prefix): string
@@ -29,7 +33,7 @@ final class InlineStateRegistry
         return strtolower($prefix) . self::$counters[$execution][$index];
     }
 
-    public static function register(string $name, mixed $initial): void
+    public static function register(string $name, mixed $initial, ?array $typeRule = null): void
     {
         $execution = self::executionId();
         $index = array_key_last(self::$contexts[$execution] ?? []);
@@ -38,6 +42,7 @@ final class InlineStateRegistry
             throw new \LogicException("Duplicate inline state identifier: {$name}");
         }
         self::$contexts[$execution][$index][$name] = $initial;
+        if ($typeRule !== null) self::$typeRules[$execution][$index][$name] = $typeRule;
     }
 
     /** @return array<string, mixed> */
@@ -47,13 +52,20 @@ final class InlineStateRegistry
         return $stack[array_key_last($stack)] ?? [];
     }
 
+    public static function currentTypeRules(): array
+    {
+        $stack = self::$typeRules[self::executionId()] ?? [];
+        return $stack[array_key_last($stack)] ?? [];
+    }
+
     public static function leave(): void
     {
         $execution = self::executionId();
         array_pop(self::$contexts[$execution]);
         array_pop(self::$counters[$execution]);
+        array_pop(self::$typeRules[$execution]);
         if ((self::$contexts[$execution] ?? []) === []) {
-            unset(self::$contexts[$execution], self::$counters[$execution]);
+            unset(self::$contexts[$execution], self::$counters[$execution], self::$typeRules[$execution]);
         }
     }
 

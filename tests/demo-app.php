@@ -13,6 +13,7 @@ $expectations = [
     '/tasks' => ['Add task', '<form', 'data-aml-validate', 'data-aml-list="tasks"', 'data-aml-client-submit'],
     '/tasks/42' => ['Task #42', 'views/pages/tasks/[id]/page.php'],
     '/settings' => ['Application settings', 'data-aml-theme-switcher'],
+    '/controls' => ['Un rendez-vous, simplement.', 'data-aml-calendar', 'role="switch"', 'aml-picker'],
 ];
 
 foreach ($expectations as $path => $fragments) {
@@ -38,4 +39,4 @@ if (!str_contains($application->notFound('/missing'), 'Page not found')) {
     throw new RuntimeException('AML Tasks not-found state is unavailable.');
 }
 
-echo "AML Tasks demo: 4 routes, dynamic routing, metadata, styles and states passed.\n";
+echo "AML Tasks demo: 5 routes, dynamic routing, metadata, styles and states passed.\n";

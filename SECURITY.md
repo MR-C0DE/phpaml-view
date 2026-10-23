@@ -16,6 +16,13 @@ AML View has no automatic server-interaction endpoint. Local actions run in
 the browser, while backend communication is visible through explicit
 `Api::get()`, `Api::post()` and related instructions.
 
+Element names are validated, executable HTML attributes (including `srcdoc`)
+are refused, and URL attributes are checked even when set through `attribute()`.
+Data/blob URLs are limited to passive media contexts. Script sources remain local
+through every setter. Choose element/attribute names in trusted application code;
+these checks do not turn arbitrary HTML or application structure into safe input.
+Keep the production Content Security Policy enabled as an additional boundary.
+
 `#[Persisted]` uses browser storage and must never contain passwords, session
 tokens, private keys or other secrets. Persisted payloads are versioned and may
 expire, but remain readable by scripts executing on the same origin. State

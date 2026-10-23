@@ -50,10 +50,10 @@ $unpackedClassPage = new class extends \AML\View\Page {
 (new TestView((new Renderer())->render($unpackedClassPage)))->assertSee('André');
 $writePage = new class extends \AML\View\Page {
     #[\AML\View\State] public string $message = 'André';
-    public function body(): \AML\View\View { return \AML\View\Component(\AML\View\Tests\Composition\InvalidInputWrite::class, $this->message); }
+    public function body(): \AML\View\View { return \AML\View\Component(\AML\View\Tests\Composition\WritableInput::class, $this->message); }
 };
-\AML\View\Testing\ViewTest::assertThrows(fn () => (new Renderer())->render($writePage), InvalidArgumentException::class);
-echo 'Reactive composition: class unpacking and explicit diagnostics for references and input writes passed.'.PHP_EOL;
+(new TestView((new Renderer())->render($writePage)))->click('Écrire')->assertState('message', 'Modifié');
+echo 'Reactive composition: class unpacking, reference diagnostics and parent input writes passed.'.PHP_EOL;
 foreach ([\AML\View\Tests\Composition\EarlyReturnInput::class, \AML\View\Tests\Composition\MethodInput::class] as $class) {
     $supported = new class($class) extends \AML\View\Page {
         #[\AML\View\State] public string $message = 'André';

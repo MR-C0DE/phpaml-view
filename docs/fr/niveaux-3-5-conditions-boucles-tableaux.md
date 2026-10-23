@@ -51,6 +51,30 @@ HTML n’est ajouté à la page. Pour afficher un résultat, affecter une propri
 | 53 | Imbrication des boucles, avec conditions et `switch` dans leur corps. |
 | 54 | Arrêt après 1 000 itérations par boucle et 10 000 itérations cumulées par invocation. |
 
+Ces protections s'appliquent aussi aux boucles dans les fonctions et générateurs.
+L'erreur `PHP_LOOP_LIMIT` distingue la limite d'une boucle (`limitKind: "loop"`)
+du budget partagé (`limitKind: "execution"`). Son message indique le nombre
+autorisé et le fichier PHP avec sa ligne. L'événement restaure le State après
+une erreur non interceptée, et les événements suivants restent utilisables.
+
+Les tests permanents vérifient notamment 128 `if` imbriqués, 64 boucles imbriquées,
+les mélanges de boucles, `break 2`, `continue 3` et `try`/`finally`. La profondeur
+n'est pas illimitée : le format compilé garde une limite de 512 conteneurs JSON
+imbriqués. Ce nombre ne correspond pas à un nombre fixe de `if`. Une structure
+trop profonde est refusée à la compilation avec son emplacement PHP.
+
+`composer test` et `composer test:language-runtime` exécutent ces comparaisons
+avec PHP natif. Pour mesurer la compilation seule (avec sérialisation finale,
+sans rendu HTML ni exécution), lancer depuis le dépôt View :
+
+```sh
+php tests/nested-control-flow.php --case=if-depth-128-function --benchmark --json
+```
+
+Le résultat contient trois mesures après un passage de chauffe et leur médiane.
+Les blocs déjà compilés sont conservés sous leur forme sérialisée pendant cette
+compilation, sans cache global partagé entre les composants ou leurs State.
+
 ```php
 Button('Compter')->onClick(function (): void {
     for ($number = 1; $number <= 10; $number++) {

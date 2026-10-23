@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace AML\View;
 
-use AML\Engine\{ClientInstruction, FlowAction, StateExpression};
+use AML\Engine\{ClientInstruction, FlowAction, StateExpression, StateRef};
 use Closure;
 
 /** @internal Builds a closed function table from PHP source; never invokes user code. */
@@ -132,7 +132,7 @@ trait FrontendFunctionCompiler
                 $parameters[] = $param;
                 $locals[$parameter->getName()] = new FrontendLocal($parameter->getName(), $param['default'] ?? null);
             }
-            if ($function instanceof \ReflectionFunction && $function->isClosure()) foreach ($function->getStaticVariables() as $key => $_) $locals[$key] = new FrontendLocal($key, null);
+            if ($function instanceof \ReflectionFunction && $function->isClosure()) foreach ($function->getStaticVariables() as $key => $value) $locals[$key] = ($value instanceof StateRef || $value instanceof CollectionItem) ? $value : new FrontendLocal($key, null);
             $isArrow = false;
             $body = $function instanceof \ReflectionFunction && $function->isClosure() ? self::bodyTokens($function->getClosure(), $isArrow) : self::methodBodyTokens($function);
             if (self::$displayComponent !== null && self::$objectScope === null) $body = self::displayProperties($body, self::$displayComponent, self::sourceLocation($function), false);
@@ -198,6 +198,7 @@ trait FrontendFunctionCompiler
         $values = $function->getStaticVariables();
         foreach ($values as $name => $value) {
             if (\ReflectionReference::fromArrayElement($values, $name)) throw new \InvalidArgumentException('A server-created closure cannot carry a reference into the browser; create it inside the frontend event.');
+            if (($value instanceof StateRef || $value instanceof CollectionItem)) continue; // The compiled body keeps the owning State path.
             $captures[] = ['id' => 'v' . bin2hex($name), 'reference' => false, 'value' => $value instanceof Closure ? self::capturedClosure($value) : self::literalValue($value)];
         }
         return new StateExpression('closure', $id, $captures);
@@ -265,7 +266,7 @@ trait FrontendFunctionCompiler
             foreach (self::splitArguments($uses) as $use) {
                 $byReference = $use[0]['text'] === '&';
                 $name = substr($use[$byReference ? 1 : 0]['text'], 1);
-                $captures[$name] = ['id' => 'v' . bin2hex($name), 'reference' => $byReference, 'value' => ['$local' => 'v' . bin2hex($name)]];
+                $captures[$name] = ['id' => 'v' . bin2hex($name), 'reference' => $byReference, 'value' => (($locals[$name] ?? null) instanceof StateRef || ($locals[$name] ?? null) instanceof CollectionItem) ? $locals[$name] : ['$local' => 'v' . bin2hex($name)]];
             }
         }
         $type = '';
@@ -286,7 +287,7 @@ trait FrontendFunctionCompiler
                 $name = substr($token['text'], 1);
                 if (!isset($bodyLocals[$name]) && (isset($locals[$name]) || isset($locals['__aml_eval_scope__']))) $captures[$name] = ['id' => 'v' . bin2hex($name), 'reference' => false, 'value' => ($locals[$name] ?? null) instanceof FrontendLocal ? $locals[$name]->reference() : ($locals[$name] ?? ['$local' => 'v' . bin2hex($name)])];
             }
-            foreach ($captures as $name => $_) $bodyLocals[$name] = new FrontendLocal($name, null);
+            foreach ($captures as $name => $capture) $bodyLocals[$name] = ($capture['value'] instanceof StateRef || $capture['value'] instanceof CollectionItem) ? $capture['value'] : new FrontendLocal($name, null);
             $value = self::expression($tokens, $index, $static ? [] : $states, $bodyLocals, 0);
             // Nested closures carry only their captures in this expression;
             // their parameters and bodies belong to a different function frame.
@@ -302,7 +303,7 @@ trait FrontendFunctionCompiler
             $body = new FlowAction('return', ['value' => $value, 'hasValue' => true]);
         } else {
             [$bodyTokens, $index] = self::delimited($tokens, $index, '{', '}');
-            foreach ($captures as $name => $_) $bodyLocals[$name] = new FrontendLocal($name, null);
+            foreach ($captures as $name => $capture) $bodyLocals[$name] = ($capture['value'] instanceof StateRef || $capture['value'] instanceof CollectionItem) ? $capture['value'] : new FrontendLocal($name, null);
             self::predeclareFunctions($bodyTokens);
             $body = self::blockAction(self::instructions($bodyTokens, $declaredName === null && !$static ? $states : [], $bodyLocals));
         }
@@ -312,6 +313,8 @@ trait FrontendFunctionCompiler
         $id = $declaredName !== null ? self::functionId($declaredName) : self::functionId(json_encode([$source, array_slice($tokens, $start, $index - $start)]));
         $source['function'] = $name;
         self::$functions[$id] = self::functionPayload(['name' => $name, 'returnsReference' => $returnsReference, 'parameters' => $parameters, 'returnType' => self::typeRule($type, true), 'body' => $body, 'source' => $source, 'objectScope' => $declaredName === null ? self::$objectScope : null, 'bindThis' => !$static && $declaredName === null && self::$objectScope !== null && $previousThis, 'declared' => $declaredName === null]);
+        // StateRef captures are live bindings, unlike ordinary PHP value captures.
+        $captures = array_filter($captures, static fn ($capture) => !($capture['value'] instanceof StateRef || $capture['value'] instanceof CollectionItem));
         return new StateExpression('closure', $id, array_values($captures));
     }
 

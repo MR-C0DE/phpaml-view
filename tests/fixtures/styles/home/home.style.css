@@ -1,0 +1,8 @@
+.container { align-items: flex-start; padding: 24px; }
+.title { color: rgb(10, 20, 30); font-size: 24px; }
+.title:hover { color: rgb(30, 40, 50); }
+.container .button { border-radius: 10px; }
+.button { background: rgb(112, 71, 235); color: white; padding: 12px; animation: reveal 1ms linear; }
+.button:focus { outline: 3px solid rgb(0, 100, 200); }
+@media (max-width: 640px) { .container { padding: 12px; } }
+@keyframes reveal { from { opacity: 0.9; } to { opacity: 1; } }

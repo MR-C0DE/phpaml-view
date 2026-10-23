@@ -4,11 +4,14 @@ Declarative frontend interfaces for PHPAML — authored entirely in PHP.
 
 See the [seven language extensions and their exact scope](docs/fr/extensions-langage.md).
 
-> Status: `0.1.0-beta.13`. The public API is ready for real-world evaluation,
+> Status: `0.1.0-beta.14`. The public API is ready for real-world evaluation,
 > but backward compatibility is not guaranteed until `1.0.0`.
 
 [Documentation française](docs/fr/README.md) · [API reference](docs/API.md) ·
 [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+
+New form controls: [Picker, Toggle and Calendar](docs/fr/controles.md), with a
+styled, reactive `/controls` page in the AML Tasks example.
 
 Frontend error handling: [level 10 guide](docs/fr/niveau-10-erreurs-exceptions.md)
 and [service exception example](examples/niveau-10/page.php).
@@ -36,6 +39,12 @@ composer require phpaml/view:^0.1@beta phpaml/engine:^0.1@beta
 ```
 
 ## Your first interactive page
+
+Pages and components may also be declared as PascalCase functions returning
+`View`, with local `State()` and an optional `body()` root. FileApplication loads
+both forms, preserving class layouts and per-instance state/effects. See
+[function pages and components](docs/API.md#function-pages-and-components) for
+discovery, props and lifecycle rules.
 
 ```php
 <?php
@@ -343,6 +352,16 @@ Section(
     Heading('Welcome')->class('home-title'),
 )->class('home-hero', 'featured');
 ```
+
+Reusable fluent styles, named PHP style maps and local `.style.css` /
+`.module.css` files are available through `AML\View\Style`. `make()` and
+argument-free `create()` are equivalent. Apply them with `->style($style)`;
+existing direct modifiers remain supported. Values automatically follow State,
+including calculated values, interpolation and forwarded component inputs.
+Use `media()`, `supports()`, `container()`, form states, pseudo-elements and
+locally scoped `keyframes()` in PHP; their property values also follow State.
+Connect local CSS variables with reactive property maps. See [Style and local CSS modules](docs/fr/styles.md)
+for scope, examples and supported CSS. The `/controls` demo includes both forms.
 
 Keep global selectors in `src/views/stylesheets/base.css`. Stylesheets for
 pages, components, layouts, and states should use class-based selectors.
@@ -870,14 +889,16 @@ Button('Save')->onClick(Actions::transaction(
 ));
 ```
 
-Styles mirror the view tree. `FileApplication::styles()` bundles every CSS file
-under `src/views/stylesheets` in deterministic order. The application exposes
+Styles mirror the view tree. `FileApplication::styles()` bundles CSS declared
+with `import()`, plus the global `src/views/stylesheets/base.css` and all CSS
+under `src/views/themes`, in deterministic order. Other CSS files are excluded
+until imported. The application exposes
 that bundle at `/_aml/styles.css`, keeping `public/` limited to the entry point
 and static assets. Application images and media belong in `public/assets`.
 Documents that require a direct top-level URL—such as the logo, favicon,
 `robots.txt`, and `sitemap.xml`—stay at the root of `public`.
 
-Declare which stylesheet belongs to a page or component with one top-level
+Include a stylesheet from a page, component, layout, or state with one top-level
 `import()` outside the class. Its path is relative to `src/views/stylesheets`:
 
 ```php
@@ -898,6 +919,11 @@ final class HomePage extends Page
 and deduplicates repeated declarations. `class()` remains responsible for
 applying a stylesheet class to an element. The application keeps one global,
 deterministic bundle so navigation never flashes or reloads page styles.
+Imports are application-wide, not scoped to a route or component. Removing the
+last import excludes that file on the next page reload (or production rebuild),
+even if the CSS file remains on disk. A stylesheet imported by another view
+remains included. Existing applications that relied on automatic directory
+scanning must add imports for their page, component, layout, and state CSS.
 
 ```php
 $app = new FileApplication(__DIR__ . '/../src/views');
@@ -977,30 +1003,29 @@ variable `PHPAML_ENGINE_TEST_REF` selects the matching Engine revision (default
 
 ## Construction-free view trees
 
-Application code does not need to expose object construction. Generic elements
-use the `Element()` factory, and a custom component may declare a same-name
-factory next to its class:
+`FileApplication` automatically defines same-name functions for the component
+classes in `src/views/components/`. Write the class and its constructor once:
 
 ```php
-final class Navigation extends Component
+final class Greeting extends Component
 {
+    public function __construct(private string $name = 'André') {}
+
     public function body(): View
     {
-        return Element('nav', Link('Tasks', '/tasks'));
+        return Text('Hello ' . $this->name);
     }
-}
-
-function Navigation(mixed ...$arguments): Navigation
-{
-    return new Navigation(...$arguments);
 }
 ```
 
-Pages and layouts can then use `Navigation()` directly. `FileApplication`
-preloads component files before pages and layouts, while
-`aml make:view-component Navigation` generates the factory automatically.
-`Component(Navigation::class, ...)` remains the generic fallback, and ordinary
-`new Navigation()` stays fully compatible.
+Pages and layouts can use `Greeting()`, `Greeting('Alice')` or
+`Greeting(name: $this->name)` after importing the function with `use function`.
+Parameter names, types, defaults, references, variadics and the concrete return
+type are generated from the constructor, including inherited signatures. State
+inputs retain their reactive bindings. `aml make:view-component Greeting` creates
+only the class. Existing handwritten functions are preserved; generated functions
+live in memory and need no writable cache. `Component(Greeting::class, ...)` and
+`new Greeting()` remain supported, including outside `FileApplication`.
 
 Use the built-in test API for fast component and page tests:
 

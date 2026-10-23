@@ -14,12 +14,16 @@ trait NaturalStateArguments
             elseif (array_key_exists($i, $frame['args'] ?? [])) $locals[$parameter->getName()] = $frame['args'][$i];
             elseif ($parameter->isDefaultValueAvailable()) $locals[$parameter->getName()] = $parameter->getDefaultValue();
         }
+        $locals = array_replace($locals, IListRowContext::locals($function));
+        if ($component instanceof FunctionalComponent && strcasecmp($function->getName(), $component->functionName()) === 0) {
+            return array_replace($locals, $component->inputBindings());
+        }
         if (!$locals || empty($frame['file']) || !is_file($frame['file'])) return $locals;
         if ($depth >= 16) throw new \RangeException('Reactive helper dependencies exceed 16 nested calls. [PHP ' . $frame['file'] . ':' . $frame['line'] . ']');
         $parent = $trace[$position + 1] ?? [];
         if (isset($parent['class'], $parent['function']) && method_exists($parent['class'], $parent['function'])) $reflection = new \ReflectionMethod($parent['class'], $parent['function']);
         elseif (isset($parent['function']) && function_exists($parent['function'])) $reflection = new \ReflectionFunction($parent['function']);
-        else return $locals;
+        else { $reflection = IListRowContext::reflection($parent); if ($reflection === null) return $locals; }
         if (!$reflection->getFileName() || str_starts_with($reflection->getFileName(), __DIR__ . '/')) return $locals;
         $tokens = self::tokens($frame['file']);
         $matches = [];

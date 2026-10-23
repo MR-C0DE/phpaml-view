@@ -49,7 +49,8 @@ trait NaturalStateConstruction
     public static function captureReturned(View $view, Component $component): View
     {
         if (!$view instanceof Component || isset(self::$componentProperties[$view])) return $view;
-        $caller = new \ReflectionMethod($component, 'body');
+        $caller = $component instanceof FunctionalComponent || $component instanceof FunctionalPage
+            ? new \ReflectionFunction($component->functionName()) : new \ReflectionMethod($component, 'body');
         if (!$caller->getFileName() || !is_file($caller->getFileName())) return $view;
         $tokens = self::tokens($caller->getFileName());
         $returns = [];
@@ -66,15 +67,40 @@ trait NaturalStateConstruction
             if (in_array($tokens[$i]['text'], [')', ']', '}'], true)) $depth--;
             $part[] = $tokens[$i];
         }
-        self::captureConstruction($view, $part, $tokens, $position, $caller, $component, []);
+        self::captureConstruction($view, $part, $tokens, $position, $caller, $component, $component instanceof FunctionalComponent ? $component->inputBindings() : []);
         return $view;
+    }
+
+    /** @internal Capture a class returned directly by a row factory. */
+    public static function captureRow(Component $view, \Closure $factory): void
+    {
+        if (isset(self::$componentProperties[$view])) return;
+        $contexts = self::$contexts[self::executionId()] ?? [];
+        $component = $contexts[array_key_last($contexts)]['component'] ?? null;
+        if ($component === null) return;
+        $caller = IListRowContext::reflection(['function' => '{closure}']);
+        if ($caller === null) return;
+        $arrow = false; $tokens = FrontendClosureCompiler::rowFactoryTokens($factory, $arrow);
+        $part = $tokens; $position = 0;
+        if (!$arrow) {
+            $returns = []; $depth = 0;
+            foreach ($tokens as $i => $token) {
+                if ($token['text'] === '{') $depth++;
+                if ($token['text'] === '}') $depth--;
+                if ($token['id'] === T_RETURN && $depth === 0) $returns[] = $i;
+            }
+            if (count($returns) !== 1) throw new \InvalidArgumentException('Use Component() or a generated factory for multiple row return branches.');
+            $position = $returns[0]; $part = array_slice($tokens, $position + 1);
+            if (($part[array_key_last($part)]['text'] ?? '') === ';') array_pop($part);
+        }
+        self::captureConstruction($view, $part, $tokens, $position, $caller, $component, IListRowContext::locals($caller));
     }
 
     private static function constructionCaller(array $frame): ?\ReflectionFunctionAbstract
     {
         if (isset($frame['class'], $frame['function']) && method_exists($frame['class'], $frame['function'])) return new \ReflectionMethod($frame['class'], $frame['function']);
         if (isset($frame['function']) && function_exists($frame['function'])) return new \ReflectionFunction($frame['function']);
-        return null;
+        return IListRowContext::reflection($frame);
     }
 
     private static function captureConstruction(Component $child, array $part, array $tokens, int $position, \ReflectionFunctionAbstract $caller, Component $component, array $locals, int $depth = 0): void
@@ -82,6 +108,18 @@ trait NaturalStateConstruction
         if ($depth >= 16) throw new \RangeException('Reactive component factories exceed 16 nested calls.');
         $part = self::expand($part, self::aliases($tokens, $position, $caller->getStartLine()), $locals);
         while (($part[0]['text'] ?? '') === '(' && ($part[array_key_last($part)]['text'] ?? '') === ')') $part = array_slice($part, 1, -1);
+        if (in_array($part[0]['id'] ?? null, [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE], true) && ($part[1]['text'] ?? '') === '(') {
+            $name = FrontendImports::qualify($part[0]['text'], FrontendImports::namespaceForFunction($caller), FrontendImports::forFunction($caller), 'function');
+            if (ComponentFactories::classFor($name) === $child::class) {
+                // Generated factories forward the constructor signature verbatim.
+                // Use the caller's real source, never the evaluated declaration.
+                $part = [
+                    ['id' => T_NEW, 'text' => 'new', 'line' => $part[0]['line']],
+                    ['id' => T_NAME_FULLY_QUALIFIED, 'text' => '\\' . $child::class, 'line' => $part[0]['line']],
+                    ...array_slice($part, 1),
+                ];
+            }
+        }
         if (($part[0]['id'] ?? null) !== T_NEW) {
             $helper = null; $open = 1;
             if (($part[0]['text'] ?? '') === '$this' && ($part[1]['id'] ?? null) === T_OBJECT_OPERATOR && ($part[3]['text'] ?? '') === '(' && method_exists($component, $part[2]['text'])) {
@@ -121,8 +159,11 @@ trait NaturalStateConstruction
         if (($part[$open]['text'] ?? '') !== '(') return;
         [$arguments] = self::arguments($part, $open);
         if (!self::mentionsState(array_merge([], ...$arguments), StateInterpolation::current() ?? [], $component) && !self::reactiveLocals($locals)) return;
-        $initial = [];
-        foreach ($constructor->getParameters() as $parameter) $initial[$parameter->getName()] = $parameter->isDefaultValueAvailable() ? $parameter->getDefaultValue() : null;
+        $initial = ComponentFactories::argumentsFor($child);
+        if ($initial === null) {
+            $initial = [];
+            foreach ($constructor->getParameters() as $parameter) $initial[$parameter->getName()] = $parameter->isDefaultValueAvailable() ? $parameter->getDefaultValue() : null;
+        }
         $resolved = self::bindArguments($arguments, $constructor, $caller, $component, $initial, $tokens, $position, $locals, true);
         if (!str_contains(json_encode(normalizeReactiveValue(array_map(static fn ($value) => $value instanceof DisplayValue ? $value->expression : $value, $resolved)), JSON_THROW_ON_ERROR), '"$state"')) return;
         self::bindComponent($child, [], $resolved);

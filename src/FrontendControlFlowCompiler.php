@@ -197,7 +197,7 @@ trait FrontendControlFlowCompiler
     private static function isAssignable(mixed $value): bool
     {
         return $value instanceof StateRef || is_array($value) && (isset($value['$local']) || isset($value['$collection']))
-            || $value instanceof StateExpression && in_array($value->operation, ['dynamicLocal', 'objectProperty', 'objectStaticProperty'], true) && !($value->right['nullable'] ?? false)
+            || $value instanceof StateExpression && in_array($value->operation, ['componentInput', 'dynamicLocal', 'objectProperty', 'objectStaticProperty'], true) && !($value->right['nullable'] ?? false)
             || $value instanceof StateExpression && in_array($value->operation, ['offset', 'appendOffset'], true) && (self::isAssignable($value->left) || $value->left instanceof StateExpression && in_array($value->left->operation, ['objectThis', 'objectCall', 'objectNew', 'call'], true));
     }
 

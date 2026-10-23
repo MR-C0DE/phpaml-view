@@ -67,6 +67,7 @@ final class FrontendClosureCompiler
                     throw new \InvalidArgumentException('Frontend captures cannot be passed by reference.');
                 }
                 self::assertLocalName($name);
+                if ($value instanceof StateRef || $value instanceof CollectionItem) { $locals[$name] = $value; continue; }
                 $value = $value instanceof Closure ? self::capturedClosure($value) : self::literalValue($value);
                 $locals[$name] = new FrontendLocal($name, $value);
                 $initializers[] = new LocalAction($locals[$name]->id(), $value);
@@ -76,10 +77,13 @@ final class FrontendClosureCompiler
             $action = Actions::sequence(...$actions);
             // Every invocation owns its locals, including effects and nested handlers.
             $json = $action->json();
-            self::validateStaticLocals(json_decode($json, true));
-            if (self::containsYield(json_decode($json, true))) throw new \InvalidArgumentException('An event cannot itself yield; call a generator function and iterate it inside the event.');
-            return self::$classes !== [] || str_contains($json, '"operation":"eval"') || self::$functions !== [] || str_contains($json, '"type":"return"') || str_contains($json, '"type":"local-set"') || str_contains($json, '"$local"') || str_contains($json, '"operation":"gettype"') || str_contains($json, '"level":"dump"')
+            $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+            self::validateStaticLocals($payload);
+            if (self::containsYield($payload)) throw new \InvalidArgumentException('An event cannot itself yield; call a generator function and iterate it inside the event.');
+            $result = self::$classes !== [] || str_contains($json, '"operation":"eval"') || self::$functions !== [] || str_contains($json, '"type":"return"') || str_contains($json, '"type":"local-set"') || str_contains($json, '"$local"') || str_contains($json, '"operation":"gettype"') || str_contains($json, '"level":"dump"')
                 ? new LocalScope($action, self::$functions, self::$classes, self::$classes === [] && !str_contains($json, '"operation":"staticLocal"') && !str_contains(json_encode(self::$functions), '"operation":"staticLocal"') ? null : FrontendServiceScope::mark()) : $action;
+            // Validate the complete scope here, so depth failures retain the PHP origin.
+            return new FrontendCompiledInstruction($result);
         } catch (\Throwable $error) {
             throw self::locatedError($error, self::sourceLocation(new \ReflectionFunction($closure)));
         } finally {
@@ -284,8 +288,9 @@ final class FrontendClosureCompiler
                     $action = $statement === [] ? null : self::statement($statement, $states, $locals);
                 }
                 if ($action !== null) {
+                    $action = self::located($action, $origin);
                     self::invalidateMutatedLocals(json_decode($action->json(), true, 512, JSON_THROW_ON_ERROR), $locals);
-                    $actions[] = self::located($action, $origin);
+                    $actions[] = $action;
                 }
             } catch (\Throwable $error) { throw self::locatedError($error, $origin); }
         }
@@ -415,6 +420,7 @@ final class FrontendClosureCompiler
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states */
     private static function statement(array $tokens, array $states, array &$locals): ?ClientInstruction
     {
+        if (($tokens[0]['text'] ?? null) === '[property]') return new ExpressionAction(self::value($tokens, $states, $locals));
         if (($tokens[0]['id'] ?? null) === T_STATIC && ($tokens[1]['id'] ?? null) === T_VARIABLE) return self::staticLocalStatement($tokens, $states, $locals);
         if (($tokens[0]['text'] ?? null) === '[' || ($tokens[0]['id'] ?? null) === T_LIST) return self::destructureStatement($tokens, $states, $locals);
         if (in_array('&', array_column($tokens, 'text'), true) && in_array('=', array_column($tokens, 'text'), true)) return new ExpressionAction(self::value($tokens, $states, $locals));
@@ -468,6 +474,7 @@ final class FrontendClosureCompiler
         if (count($tokens) >= 2 && $tokens[0]['id'] === T_VARIABLE && $tokens[0]['text'] !== '$this') {
             $name = substr($tokens[0]['text'], 1);
             self::assertLocalName($name);
+            if (($locals[$name] ?? null) instanceof StateRef) return new ExpressionAction(self::value($tokens, $states, $locals));
             $operator = $tokens[1];
             $previous = $locals[$name] ?? null;
             if (!array_key_exists($name,$locals) && isset($locals['__aml_eval_scope__'])) $locals[$name] = new FrontendLocal($name, ['$local'=>'v'.bin2hex($name)]);
@@ -708,7 +715,7 @@ final class FrontendClosureCompiler
     private static function assertAssignable(mixed $value): void
     {
         if (self::nullsafeChain($value) !== $value || !self::isAssignable($value)) {
-            throw new \InvalidArgumentException('An assignment or increment must target a local variable or #[State] property.');
+            throw new \InvalidArgumentException('An assignment or increment must target a local variable, #[State] property or writable component input; calculated inputs are read-only.');
         }
     }
 
@@ -789,10 +796,29 @@ final class FrontendClosureCompiler
     }
 
     /** @param list<array{id: int|string, text: string}> $tokens @param array<string, StateRef> $states @param array<string, mixed> $locals */
+    /** @internal Source for a row factory, without invoking it again. */
+    public static function rowFactoryTokens(Closure $factory, bool &$arrow): array { return self::bodyTokens($factory, $arrow); }
+
     private static function operand(array $tokens, int &$index, array $states, array $locals): mixed
     {
         $token = $tokens[$index] ?? null;
         if ($token === null) throw new \InvalidArgumentException('Incomplete frontend expression.');
+        $item = $token['id'] === T_VARIABLE ? ($locals[substr($token['text'], 1)] ?? null) : null;
+        if ($item instanceof CollectionItem && ($tokens[$index + 1]['text'] ?? '') === '->' && in_array($tokens[$index + 2]['text'] ?? '', ['value', 'state'], true)) {
+            [$arguments, $end] = self::delimited($tokens, $index + 3, '(', ')');
+            $parts = self::splitTopLevel($arguments, ',');
+            if (count($parts) < 1 || count($parts) > 2) throw new \InvalidArgumentException('A row field expects a path and an optional fallback.');
+            $path = self::value($parts[0], $states, $locals);
+            if (!is_string($path)) throw new \InvalidArgumentException('A row field path must be a literal string.');
+            $method = $tokens[$index + 2]['text'];
+            $index = $end;
+            if ($method === 'value' && $item->reference() === null) {
+                return $item->value($path) ?? (isset($parts[1]) ? self::value($parts[1], $states, $locals) : null);
+            }
+            $reference = $item->state($path);
+            return isset($parts[1]) ? new StateExpression('coalesce', $reference, self::value($parts[1], $states, $locals)) : $reference;
+        }
+
         if(in_array($token['id'],[T_STRING,T_NAME_QUALIFIED,T_NAME_FULLY_QUALIFIED,T_NAME_RELATIVE,T_STATIC],true) && ($tokens[$index+1]['id']??null)===T_DOUBLE_COLON && in_array($tokens[$index+2]['id']??null,[T_STRING,T_CLASS],true) && ($tokens[$index+3]['text']??'')!=='(') { $name=self::exceptionName($token['text']);$member=$tokens[$index+2];$index+=3;return new StateExpression($member['id']===T_CLASS?'objectClass':'objectConstant',strtolower($token['text'])==='static'?'@static':$name,$member['text']); }
         if ($token['id'] !== T_VARIABLE && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON && (($tokens[$index + 2]['id'] ?? null) === T_VARIABLE || ($tokens[$index + 2]['text'] ?? null) === '$') && ($tokens[$index + 3]['text'] ?? null) !== '(') return self::objectStaticProperty($tokens, $index, $states, $locals);
         if (in_array($token['id'], [T_YIELD, T_YIELD_FROM], true)) {
@@ -1209,14 +1235,17 @@ final class FrontendClosureCompiler
 
     private static function located(ClientInstruction $action, ?array $source): ClientInstruction
     {
-        return $source === null ? $action : new SourceInstruction($action, $source);
+        return new FrontendCompiledInstruction($source === null ? $action : new SourceInstruction($action, $source));
     }
 
     private static function locatedError(\Throwable $error, ?array $source): \Throwable
     {
         if ($source === null || str_contains($error->getMessage(), ' [PHP ')) return $error;
         $class = $error::class;
-        return new $class($error->getMessage() . " [PHP {$source['file']}:{$source['line']}]", (int) $error->getCode(), $error);
+        $message = $error instanceof \JsonException && $error->getCode() === JSON_ERROR_DEPTH
+            ? 'Frontend compilation exceeds the serialization depth limit (512 nested JSON containers). Reduce nesting or extract smaller functions.'
+            : $error->getMessage();
+        return new $class($message . " [PHP {$source['file']}:{$source['line']}]", (int) $error->getCode(), $error);
     }
 
     private static function stringLiteral(string $literal): string

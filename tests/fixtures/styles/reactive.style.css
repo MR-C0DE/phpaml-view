@@ -1,0 +1,2 @@
+.title { color: var(--accent); font-size: var(--size); }
+.title:hover { border-color: var(--accent); }

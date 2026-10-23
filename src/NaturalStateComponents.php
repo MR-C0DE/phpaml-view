@@ -39,6 +39,33 @@ trait NaturalStateComponents
         return self::$componentProperties[$component] ?? [];
     }
 
+    /** @internal Give literal/default promoted props an instance-local value. */
+    public static function enterLocalInputs(Component $component): array
+    {
+        self::$componentProperties ??= new \WeakMap();
+        $previous = self::$componentProperties[$component] ?? [];
+        $bindings = $previous; $fields = [];
+        if (!$component instanceof Page) foreach (self::componentFields(new \ReflectionObject($component)) as $field) {
+            $name = $field->getName(); $key = $field->getDeclaringClass()->getName() . '::$' . $name;
+            if (!$field->isPromoted() || $field->isStatic() || $field->isReadOnly() || !$field->isInitialized($component)
+                || $field->getAttributes(State::class) !== [] || isset($bindings[$key])
+                || method_exists($field, 'hasHooks') && $field->hasHooks()) continue;
+            $initial = $field->getValue($component);
+            if (!is_scalar($initial) && $initial !== null && !is_array($initial)) continue;
+            $reference = StateRef::to('_inputs.p' . substr(hash('sha256', $key), 0, 24), $initial);
+            $bindings[$key] = $reference; $bindings[$name] ??= $reference;
+            $fields[$reference->name] = $field;
+        }
+        self::$componentProperties[$component] = $bindings;
+        return [$previous, $fields];
+    }
+
+    /** @internal Restore bindings after a render, including an exceptional exit. */
+    public static function leaveLocalInputs(Component $component, array $previous): void
+    {
+        self::$componentProperties[$component] = $previous;
+    }
+
     public static function bindComponent(Component $component, array $arguments, ?array $resolved = null): Component
     {
         self::$componentProperties ??= new \WeakMap();
@@ -139,7 +166,7 @@ trait NaturalStateComponents
         return false;
     }
 
-    private static function constructorLocals(\ReflectionMethod $constructor, array $arguments): array
+    private static function constructorLocals(\ReflectionFunctionAbstract $constructor, array $arguments): array
     {
         $locals = []; $position = 0;
         foreach ($constructor->getParameters() as $parameter) {

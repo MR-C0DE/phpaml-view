@@ -9,7 +9,7 @@ use AML\Engine\StateNamespace;
 final readonly class CollectionItem
 {
     /** @param array<string, mixed>|null $value */
-    public function __construct(private ?array $value = null) {}
+    public function __construct(private ?array $value = null, private ?string $scope = null) {}
 
     public function text(string $path): View
     {
@@ -21,6 +21,20 @@ final readonly class CollectionItem
     {
         StateNamespace::assertSafe($path);
         return $this->read($path) ?? $fallback;
+    }
+
+    /** Live field handle: works in text, styles, conditions, props, forms and events. */
+    public function state(string $path, mixed $fallback = null): \AML\Engine\StateRef
+    {
+        StateNamespace::assertSafe($path);
+        if ($this->scope === null) throw new \LogicException('CollectionItem::state() requires a reactive IList source.');
+        return \AML\Engine\StateRef::to($this->scope . '.' . $path, $this->read($path) ?? $fallback);
+    }
+
+    /** @internal */
+    public function reference(): ?\AML\Engine\StateRef
+    {
+        return $this->scope === null ? null : \AML\Engine\StateRef::to($this->scope, $this->value ?? []);
     }
 
     private function read(string $path): mixed

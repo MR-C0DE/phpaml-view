@@ -28,7 +28,7 @@ final readonly class WhenView implements View
         $then = $this->then->render($context);
         $otherwise = $this->otherwise?->render($context) ?? '';
         $active = $this->initial === $this->equals ? $then : $otherwise;
-        return '<div data-aml-when="' . $rule . '" style="display:contents"><template data-aml-when-then>' . $then
+        return '<div data-aml-when-active="' . ($this->initial === $this->equals ? 'then' : 'else') . '" data-aml-when="' . $rule . '" style="display:contents"><template data-aml-when-then>' . $then
             . '</template><template data-aml-when-else>' . $otherwise . '</template><div data-aml-when-content style="display:contents">' . $active . '</div></div>';
     }
 }

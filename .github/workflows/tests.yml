@@ -95,3 +95,47 @@ jobs:
           name: view-distributions-${{ matrix.runtime }}
           path: phpaml-engine/test-results/
           retention-days: 7
+
+  nested-safari:
+    name: Nested PHP control flow (actual Safari, both runtimes)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: phpaml-engine
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: phpaml-view
+      - uses: actions/checkout@v5
+        with:
+          repository: MR-C0DE/phpaml-engine
+          ref: ${{ inputs.engine_ref || vars.PHPAML_ENGINE_TEST_REF || 'main' }}
+          path: phpaml-engine
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, bcmath, intl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build:check
+      - name: Verify nesting and recovery in Safari
+        run: |
+          mkdir -p test-results/nested-control-final
+          sudo /usr/bin/safaridriver --enable
+          /usr/bin/safaridriver -p 8121 > test-results/nested-control-final/safaridriver.log 2>&1 &
+          driver_pid=$!
+          trap 'kill "$driver_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8121/status > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:safari:nesting
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nested-control-safari
+          path: phpaml-engine/test-results/nested-control-final/
+          retention-days: 7

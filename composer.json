@@ -16,7 +16,7 @@
   },
   "require": {
     "php": "^8.2",
-    "phpaml/engine": "^0.1.0-beta.9"
+    "phpaml/engine": "^0.1.0-beta.10"
   },
   "autoload": {
     "psr-4": {
@@ -37,10 +37,24 @@
       "php tests/integration.php",
       "php tests/demo-app.php",
       "php tests/stabilization.php",
+      "php tests/component-contracts.php",
+      "php tests/local-state.php",
+      "php tests/functional-views.php",
+      "php tests/stylesheet-imports.php",
+      "php tests/styles.php",
+      "php tests/reactive-styles.php",
+      "php tests/style-conditions.php",
+      "php tests/style-finalization.php",
+      "php tests/controls.php",
+      "php tests/icons.php",
+      "php tests/ilists.php",
+      "php tests/computed-ilists.php",
+      "php tests/editable-ilists.php",
       "php tests/language-level1.php",
       "php tests/language-errors.php",
       "php tests/language-level2.php",
       "php tests/language-level345.php",
+      "php tests/nested-control-flow.php",
       "php tests/language-level6.php",
       "php tests/language-level78.php",
       "php tests/native-functions.php",
@@ -78,6 +92,10 @@
       "php tests/reactive-bindings.php",
       "php tests/reactive-composition.php",
       "php tests/component-forms.php",
+      "php tests/component-inputs.php",
+      "php tests/component-inputs.php --automatic",
+      "php tests/component-factories.php",
+      "php tests/security-boundaries.php",
       "php tests/common-functions.php"
     ],
     "test:language-runtime": [
@@ -85,6 +103,7 @@
       "node tests/language-errors.mjs",
       "node tests/language-level2.mjs",
       "node tests/language-level345.mjs",
+      "node tests/nested-control-flow.mjs",
       "node tests/language-level6.mjs",
       "node tests/language-level78.mjs",
       "node tests/native-functions.mjs",
@@ -126,7 +145,7 @@
   "extra": {
     "phpaml": {
       "type": "view-library",
-      "version": "0.1.0-beta.13"
+      "version": "0.1.0-beta.14"
     }
   }
 }

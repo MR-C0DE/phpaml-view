@@ -17,17 +17,7 @@ final class ScriptElement extends Element
 
     public function src(string $source): static
     {
-        $source = trim($source);
-        if ($source === '' || preg_match('/[\\\\\x00-\x1F\x7F]/', $source) === 1) {
-            throw new \InvalidArgumentException('A script source must be a safe local path.');
-        }
-        if (str_starts_with($source, '//') || preg_match('/^[a-z][a-z0-9+.-]*:/i', $source) === 1) {
-            throw new \InvalidArgumentException('Script() accepts local project files only.');
-        }
-        if (preg_match('#(?:^|/)\.\.(?:/|$)#', $source) === 1) {
-            throw new \InvalidArgumentException('A script source cannot traverse outside the public directory.');
-        }
-
+        // Element validates this even when callers use attribute('src', ...).
         return $this->attribute('src', $source);
     }
 

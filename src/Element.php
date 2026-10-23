@@ -22,6 +22,8 @@ class Element implements View
     /** @var array<string, string> */
     private array $styles = [];
 
+    private ?Style $structuredStyle = null;
+
     /** @var array<string, ClientInstruction> */
     private array $clientEvents = [];
 
@@ -40,19 +42,32 @@ class Element implements View
     /** @var array{request: array<string, mixed>, debounce: int, message: string}|null */
     private ?array $remoteValidation = null;
 
-    public function __construct(private string $tag, View ...$children)
+    /** @var array<string, scalar|null>|null Attributes before status-owned overrides. */
+    private ?array $statusAttributes = null;
+
+    public function __construct(protected string $tag, View ...$children)
     {
+        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9:-]*$/D', $tag)) {
+            throw new \InvalidArgumentException('Invalid HTML tag name.');
+        }
         NaturalStateBindings::captureChildren($children);
         $this->children = $children;
     }
 
     public function attribute(string $name, string|int|float|bool|null $value): static
     {
-        if (!preg_match('/^[a-zA-Z_:][a-zA-Z0-9_.:-]*$/', $name)) {
+        if (!preg_match('/^[a-zA-Z_:][a-zA-Z0-9_.:-]*$/D', $name)) {
             throw new \InvalidArgumentException("Invalid HTML attribute: {$name}");
         }
-        if (preg_match('/^on/i', $name) === 1 || strtolower($name) === 'style') {
+        $lowerName = strtolower($name);
+        if (preg_match('/^on/i', $name) === 1 || in_array($lowerName, ['style', 'srcdoc'], true)) {
             throw new \InvalidArgumentException("Unsafe HTML attribute: {$name}");
+        }
+        if ($value !== null && $value !== false && in_array($lowerName, [
+            'href', 'xlink:href', 'src', 'action', 'formaction', 'data', 'poster',
+            'background', 'cite', 'longdesc', 'manifest', 'codebase',
+        ], true)) {
+            $value = HtmlSafety::url(strtolower($this->tag), $lowerName, (string) $value);
         }
 
         $this->attributes[$name] = $value;
@@ -75,47 +90,46 @@ class Element implements View
         return $this;
     }
 
-    public function style(string $name, string|int|float $value): static
+    public function style(string|Style|array $name, mixed $value = null): static
     {
+        if (!is_string($name)) {
+            if ($value !== null) throw new \InvalidArgumentException('A Style or property array does not accept a second style argument.');
+            $incoming = Style::from(NaturalStateBindings::styleArgument('style', $name, 0, self::class));
+            $base = $this->structuredStyle ?? Style::make();
+            foreach ($this->styles as $property => $current) $base = $base->property($property, $current);
+            $this->structuredStyle = $base->merge($incoming);
+            $this->styles = [];
+            return $this;
+        }
+        if ($value === null) throw new \InvalidArgumentException('A CSS property requires a value.');
         if (!preg_match('/^[a-z-]+$/', $name)) {
             throw new \InvalidArgumentException("Invalid CSS property: {$name}");
         }
 
-        $value = (string) $value;
-        if (preg_match('/[;{}<>\x00-\x1F\x7F]/', $value) === 1) {
-            throw new \InvalidArgumentException("Unsafe CSS value for {$name}.");
-        }
-        $this->styles[$name] = $value;
+        $value = StyleValue::prepare($name, NaturalStateBindings::styleArgument('style', $value, 1, self::class), 'raw');
+        if ($value instanceof StyleValue) return $this->style(Style::make()->property($name, $value));
+        if ($this->structuredStyle !== null) $this->structuredStyle = $this->structuredStyle->property($name, $value);
+        else $this->styles[$name] = $value;
         return $this;
     }
 
-    public function padding(int $pixels): static
+    private function styleModifier(string $method, string $property, mixed $value, string $rule = 'css'): static
     {
-        return $this->style('padding', max(0, $pixels) . 'px');
+        $value = StyleValue::prepare($property, NaturalStateBindings::styleArgument($method, $value, 0, self::class), $rule);
+        return $value instanceof StyleValue ? $this->style(Style::make()->property($property, $value)) : $this->style($property, $value);
     }
 
-    public function spacing(int $pixels): static
-    {
-        return $this->style('gap', max(0, $pixels) . 'px');
-    }
-
-    public function gap(int $pixels): static
-    {
-        return $this->spacing($pixels);
-    }
-
-    public function alignment(string $alignment): static
-    {
-        $value = match (strtolower($alignment)) {
-            'leading', 'start', 'top' => 'flex-start',
-            'center' => 'center',
-            'trailing', 'end', 'bottom' => 'flex-end',
-            'stretch' => 'stretch',
-            default => throw new \InvalidArgumentException("Unknown alignment: {$alignment}"),
-        };
-
-        return $this->style('align-items', $value);
-    }
+    public function background(mixed $value): static { return $this->styleModifier(__FUNCTION__, 'background', $value); }
+    public function backgroundColor(mixed $value): static { return $this->styleModifier(__FUNCTION__, 'background-color', $value); }
+    public function color(mixed $value): static { return $this->styleModifier(__FUNCTION__, 'color', $value, 'textColor'); }
+    public function borderRadius(mixed $value): static { return $this->style(Style::make()->property('border-radius', NaturalStateBindings::styleArgument(__FUNCTION__, $value, 0, self::class))); }
+    public function hover(Style|array $style): static { return $this->style(Style::make()->hover(NaturalStateBindings::styleArgument(__FUNCTION__, $style, 0, self::class))); }
+    public function focus(Style|array $style): static { return $this->style(Style::make()->focus(NaturalStateBindings::styleArgument(__FUNCTION__, $style, 0, self::class))); }
+    public function focusVisible(Style|array $style): static { return $this->style(Style::make()->focusVisible(NaturalStateBindings::styleArgument(__FUNCTION__, $style, 0, self::class))); }
+    public function padding(mixed $pixels): static { return $this->styleModifier(__FUNCTION__, 'padding', $pixels, 'padding'); }
+    public function spacing(mixed $pixels): static { return $this->styleModifier(__FUNCTION__, 'gap', $pixels, 'padding'); }
+    public function gap(mixed $pixels): static { return $this->styleModifier(__FUNCTION__, 'gap', $pixels, 'padding'); }
+    public function alignment(mixed $alignment): static { return $this->styleModifier(__FUNCTION__, 'align-items', $alignment, 'alignment'); }
 
     public function center(): static
     {
@@ -126,6 +140,11 @@ class Element implements View
 
     public function disabled(bool $disabled = true): static
     {
+        if ($this->statusAttributes !== null) {
+            $this->statusAttributes['disabled'] = $disabled;
+            $this->statusAttributes['aria-disabled'] = $disabled ? 'true' : null;
+            if (($this->attributes['data-aml-status'] ?? null) === ActionStatus::Loading->value) $disabled = true;
+        }
         return $this->attribute('disabled', $disabled)->attribute('aria-disabled', $disabled ? 'true' : null);
     }
 
@@ -356,56 +375,12 @@ class Element implements View
         return $this->attribute('allowfullscreen', $enabled);
     }
 
-    public function fontSize(int|float $pixels): static
-    {
-        if ($pixels <= 0 || $pixels > 1000) {
-            throw new \InvalidArgumentException('Font size must be between 0 and 1000 pixels.');
-        }
-        return $this->style('font-size', $pixels . 'px');
-    }
-
-    public function fontWeight(string|int $weight): static
-    {
-        $value = strtolower((string) $weight);
-        if (!in_array($value, ['normal', 'bold', 'bolder', 'lighter'], true)
-            && !(ctype_digit($value) && (int) $value >= 100 && (int) $value <= 900 && (int) $value % 100 === 0)) {
-            throw new \InvalidArgumentException("Unknown font weight: {$value}");
-        }
-        return $this->style('font-weight', $value);
-    }
-
-    public function lineHeight(int|float $height): static
-    {
-        if ($height <= 0 || $height > 20) {
-            throw new \InvalidArgumentException('Line height must be between 0 and 20.');
-        }
-        return $this->style('line-height', $height);
-    }
-
-    public function letterSpacing(int|float $pixels): static
-    {
-        if ($pixels < -100 || $pixels > 100) {
-            throw new \InvalidArgumentException('Letter spacing must be between -100 and 100 pixels.');
-        }
-        return $this->style('letter-spacing', $pixels . 'px');
-    }
-
-    public function textAlign(string $alignment): static
-    {
-        $alignment = strtolower($alignment);
-        if (!in_array($alignment, ['start', 'end', 'left', 'right', 'center', 'justify'], true)) {
-            throw new \InvalidArgumentException("Unknown text alignment: {$alignment}");
-        }
-        return $this->style('text-align', $alignment);
-    }
-
-    public function textColor(string $color): static
-    {
-        if ($color === '' || preg_match('/[;{}<>\x00-\x1F\x7F]/', $color) === 1) {
-            throw new \InvalidArgumentException('Invalid text color.');
-        }
-        return $this->style('color', $color);
-    }
+    public function fontSize(mixed $pixels): static { return $this->styleModifier(__FUNCTION__, 'font-size', $pixels, 'fontSize'); }
+    public function fontWeight(mixed $weight): static { return $this->styleModifier(__FUNCTION__, 'font-weight', $weight, 'fontWeight'); }
+    public function lineHeight(mixed $height): static { return $this->styleModifier(__FUNCTION__, 'line-height', $height, 'lineHeight'); }
+    public function letterSpacing(mixed $pixels): static { return $this->styleModifier(__FUNCTION__, 'letter-spacing', $pixels, 'letterSpacing'); }
+    public function textAlign(mixed $alignment): static { return $this->styleModifier(__FUNCTION__, 'text-align', $alignment, 'textAlign'); }
+    public function textColor(mixed $color): static { return $this->styleModifier(__FUNCTION__, 'color', $color, 'textColor'); }
 
     public function cite(string $source): static
     {
@@ -459,9 +434,16 @@ class Element implements View
 
     public function status(ActionStatus $status, ?string $message = null): static
     {
+        if ($this->statusAttributes === null) {
+            $this->statusAttributes = [];
+            foreach (['disabled', 'aria-disabled', 'aria-busy', 'aria-live'] as $name) {
+                $this->statusAttributes[$name] = $this->attributes[$name] ?? null;
+            }
+        }
+        foreach ($this->statusAttributes as $name => $value) $this->attribute($name, $value);
         $this->attribute('data-aml-status', $status->value);
         if ($status === ActionStatus::Loading) {
-            $this->disabled()->attribute('aria-busy', 'true');
+            $this->attribute('disabled', true)->attribute('aria-disabled', 'true')->attribute('aria-busy', 'true');
         }
         if (in_array($status, [ActionStatus::Success, ActionStatus::Info], true)) {
             $this->attribute('aria-live', 'polite');
@@ -607,27 +589,27 @@ class Element implements View
         return $this;
     }
 
-    public function updates(string $property, int|float $by = 1): static
+    public function updates(string|StateRef $property, int|float $by = 1): static
     {
-        return $this->onClick(ClientAction::increment($property, $by));
+        return $this->increments($property, $by);
     }
 
-    public function increments(string $state, int|float $by = 1): static
+    public function increments(string|StateRef $state, int|float $by = 1): static
     {
         return $this->onClick(ClientAction::increment($state, $by));
     }
 
-    public function decrements(string $state, int|float $by = 1): static
+    public function decrements(string|StateRef $state, int|float $by = 1): static
     {
         return $this->onClick(ClientAction::decrement($state, $by));
     }
 
-    public function sets(string $state, mixed $value): static
+    public function sets(string|StateRef $state, mixed $value): static
     {
         return $this->onClick(ClientAction::set($state, $value));
     }
 
-    public function toggles(string $state): static
+    public function toggles(string|StateRef $state): static
     {
         return $this->onClick(ClientAction::toggle($state));
     }
@@ -691,6 +673,10 @@ class Element implements View
     public function render(RenderContext $context): string
     {
         $attributes = $this->attributes;
+        if ($this->structuredStyle !== null) {
+            $classes = $context->styleClasses($this->structuredStyle);
+            if ($classes !== []) $attributes['class'] = trim(($attributes['class'] ?? '') . ' ' . implode(' ', $classes));
+        }
         if ($this->styles !== []) {
             $attributes['style'] = implode(';', array_map(
                 static fn (string $name, string $value): string => "{$name}:{$value}",
@@ -699,11 +685,33 @@ class Element implements View
             ));
         }
 
+        if ($this->structuredStyle !== null && ($bindings = $this->structuredStyle->bindings()) !== []) {
+            $payload = []; $active = []; $important = [];
+            foreach ($bindings as $variable => $binding) {
+                $declaration = StyleValue::declaration($binding->property, $binding->initial, $binding->keyframe);
+                $token = $variable . ($declaration['keyword'] === null ? '' : '-' . $declaration['keyword']);
+                if ($declaration['active']) {
+                    if ($declaration['keyword'] === null) $attributes['style'] = rtrim($attributes['style'] ?? '', ';') . ';' . $variable . ':' . $declaration['value'] . ';';
+                    $active[] = $token;
+                }
+                if ($declaration['important']) $important[] = $token;
+                $payload[$variable] = $binding->payload();
+            }
+            $attributes['data-aml-style-active'] = implode(' ', $active);
+            $attributes['data-aml-style-important'] = implode(' ', $important);
+            $attributes['data-aml-style-bindings'] = json_encode($payload, JSON_THROW_ON_ERROR);
+        }
+
         foreach ($this->clientEvents as $name => $action) {
             $attributes['data-aml-client-' . $name] = $action->json();
         }
         if ($this->visibilityRule !== null) {
             $attributes['data-aml-show-when'] = json_encode($this->visibilityRule, JSON_THROW_ON_ERROR);
+            // SVG has no browser-provided hidden styling. Keep the user's display
+            // declarations intact so they apply again when the State reveals it.
+            if ($this->tag === 'svg') $context->styleClasses(Style::module(
+                'aml-svg-visibility', 'svg[data-aml-show-when][hidden]{display:none!important}', 'aml-icon',
+            ));
         }
         if ($this->reactiveClasses !== []) {
             $attributes['data-aml-class-when'] = json_encode($this->reactiveClasses, JSON_THROW_ON_ERROR);
@@ -733,16 +741,48 @@ class Element implements View
             }
         }
 
-        $content = implode('', array_map(
-            static fn (View $child): string => $child->render($context),
-            $this->children,
-        ));
+        $content = $this->renderChildren($context);
 
         $html = "<{$this->tag}{$htmlAttributes}>{$content}</{$this->tag}>";
         if (in_array($this->tag, ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'], true)) {
             $html = preg_replace('#></' . preg_quote($this->tag, '#') . '>$#', '>', $html) ?? $html;
         }
         return $html;
+    }
+
+    /** @internal Specialized native elements share the same attributes and styles. */
+    protected function renderChildren(RenderContext $context): string
+    {
+        $children = $this->children;
+        if ($this->tag === 'select' && isset($this->attributes['data-aml-value'])) {
+            $children = $this->selectedChildren($children, (string) $this->attributes['data-aml-value'], $context);
+        }
+        return implode('', array_map(
+            static fn (View $child): string => $child->render($context),
+            $children,
+        ));
+
+    }
+
+    /** @param list<View> $children @return list<View> */
+    private function selectedChildren(array $children, string $value, RenderContext $context): array
+    {
+        return array_map(function (View $child) use ($value, $context): View {
+            if (!$child instanceof self) return $child;
+            if ($child->tag === 'option') {
+                $option = clone $child;
+                $optionValue = $child->attributes['value'] ?? html_entity_decode(strip_tags(implode('', array_map(
+                    static fn (View $label): string => $label->render($context), $child->children,
+                ))), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                return $option->attribute('selected', (string) $optionValue === $value);
+            }
+            if ($child->tag === 'optgroup') {
+                $group = clone $child;
+                $group->children = $this->selectedChildren($child->children, $value, $context);
+                return $group;
+            }
+            return $child;
+        }, $children);
     }
 
     /** @return array{string, mixed} */

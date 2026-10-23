@@ -15,7 +15,9 @@ final class FileApplication
         private string $audience = 'public',
         private string $namespace = 'App\\Views',
     ) {
-        $this->source = rtrim($this->source, '/\\');
+        // require_once identifies physical files. Use the same identity for
+        // import ownership when callers spell the source path differently.
+        $this->source = realpath($this->source) ?: rtrim($this->source, '/\\');
     }
 
     public function mount(string $path): PageResult
@@ -34,7 +36,7 @@ final class FileApplication
         }
         [$pattern, $parameters] = $this->match($path);
         $definition = $this->discover()[$pattern];
-        $content = (new $definition['page']())->configureRoute($parameters, null, $this->queryFrom($path));
+        $content = $this->newPage($definition['page'])->configureRoute($parameters, null, $this->queryFrom($path));
         $boundary = new NavigationBoundaryView(
             $content,
             Text('Loading…'),
@@ -48,7 +50,7 @@ final class FileApplication
     {
         [$pattern, $parameters] = $this->match($path);
         $definition = $this->discover()[$pattern];
-        return (new $definition['page']())->configureRoute($parameters, null, $this->queryFrom($path))->metadata();
+        return $this->newPage($definition['page'])->configureRoute($parameters, null, $this->queryFrom($path))->metadata();
     }
 
     public function head(string $path, ?string $nonce = null): string
@@ -64,31 +66,39 @@ final class FileApplication
 
     public function styles(): string
     {
-        // Discovery loads view files and records their top-level import()
-        // declarations before the deterministic application bundle is built.
-        $this->discover();
+        $imports = $this->stylesheetImports();
         $files = [];
-        foreach ([$this->source . '/stylesheets', $this->source . '/themes'] as $root) {
-            if (!is_dir($root)) {
-                continue;
+        $base = $this->source . '/stylesheets/base.css';
+        if (is_file($base)) {
+            $files[realpath($base)] = 'stylesheets/base.css';
+        }
+        foreach ($imports as $paths) {
+            foreach ($paths as $path) {
+                // Resolve again so removed files and changed symlinks cannot
+                // silently disappear or escape the stylesheet directory.
+                $files[StylesheetImports::resolve($this->source, $path)] ??= 'stylesheets/' . $path;
             }
+        }
+        $root = $this->source . '/themes';
+        if (is_dir($root)) {
             $iterator = new \RecursiveIteratorIterator(
                 new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
             );
             foreach ($iterator as $file) {
                 if ($file->isFile() && strtolower($file->getExtension()) === 'css') {
-                    $files[] = $file->getPathname();
+                    $relative = ltrim(str_replace('\\', '/', substr($file->getPathname(), strlen($this->source))), '/');
+                    $files[$file->getRealPath()] ??= $relative;
                 }
             }
         }
-        sort($files);
+        asort($files, SORT_STRING);
         $styles = [];
-        foreach ($files as $file) {
-            $relative = ltrim(str_replace('\\', '/', substr($file, strlen($this->source))), '/');
+        foreach ($files as $file => $relative) {
             $content = file_get_contents($file);
-            if (is_string($content)) {
-                $styles[] = "/* {$relative} */\n" . trim($content);
+            if (!is_string($content)) {
+                throw new \RuntimeException("Unable to read AML View stylesheet: {$relative}");
             }
+            $styles[] = "/* {$relative} */\n" . trim($content);
         }
         return implode("\n\n", $styles) . ($styles === [] ? '' : "\n");
     }
@@ -101,6 +111,22 @@ final class FileApplication
     public function stylesheetImports(): array
     {
         $this->discover();
+        // State CSS must be available before a loading/error/404 state is
+        // requested. Load declarations only; never construct or render states.
+        $root = $this->source . '/states';
+        if (is_dir($root)) {
+            $files = [];
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+            );
+            foreach ($iterator as $file) {
+                if ($file->isFile() && in_array($file->getFilename(), ['Loading.php', 'Error.php', 'NotFound.php'], true)) {
+                    $files[] = $file->getPathname();
+                }
+            }
+            sort($files);
+            foreach ($files as $file) $this->loadViewFile($file);
+        }
         $imports = [];
         foreach (StylesheetImports::forSource($this->source) as $owner => $stylesheets) {
             $relative = ltrim(str_replace('\\', '/', substr($owner, strlen($this->source))), '/');
@@ -161,7 +187,7 @@ final class FileApplication
     /** @param array{page: class-string<Page>, layouts: list<class-string<Layout>>, directory: string} $definition @param array<string, string> $parameters */
     private function make(array $definition, array $parameters = [], array $query = []): View
     {
-        $view = (new $definition['page']())->configureRoute($parameters, null, $query);
+        $view = $this->newPage($definition['page'])->configureRoute($parameters, null, $query);
         return $this->wrap($view, $definition['layouts']);
     }
 
@@ -222,11 +248,8 @@ final class FileApplication
                 continue;
             }
             $this->loadViewFile($file);
-            $class = $this->specialClass($candidate, $name);
-            if (!is_subclass_of($class, Page::class)) {
-                throw new \UnexpectedValueException("{$file} must declare {$class} as an AML View page.");
-            }
-            $view = (new $class())->configureRoute($parameters, $error, $this->queryFrom($path));
+            $class = $this->pageDeclaration($this->specialClass($candidate, $name), $file);
+            $view = $this->newPage($class)->configureRoute($parameters, $error, $this->queryFrom($path));
             return $withLayouts ? $this->wrap($view, $layouts) : $view;
         }
         return null;
@@ -256,10 +279,7 @@ final class FileApplication
             $directory = trim(str_replace('\\', '/', substr(dirname($pageFile), strlen($pagesRoot))), '/');
             $pattern = $directory === 'home' ? '/' : '/' . $directory;
             $this->loadViewFile($pageFile);
-            $pageClass = $this->pageClass($directory);
-            if (!is_subclass_of($pageClass, Page::class)) {
-                throw new \UnexpectedValueException("{$pageFile} must declare {$pageClass} as an AML View page.");
-            }
+            $pageClass = $this->pageDeclaration($this->pageClass($directory), $pageFile);
             $segments = $directory === '' ? [] : explode('/', $directory);
             $routes[$pattern] = [
                 'page' => $pageClass,
@@ -278,9 +298,8 @@ final class FileApplication
     }
 
     /**
-     * Component files may expose a same-name factory beside their class, for
-     * example Navigation(). Loading them before pages and layouts makes those
-     * factories available without a generated registry.
+     * Load all declarations before generating missing same-name factories, so
+     * handwritten factories (including those in separate files) take precedence.
      */
     private function loadComponentFactories(): void
     {
@@ -297,6 +316,7 @@ final class FileApplication
         }
         sort($files);
         foreach ($files as $file) $this->loadViewFile($file);
+        ComponentFactories::registerFiles($files);
     }
 
     /** @param list<string> $segments @return list<class-string<Layout>> */
@@ -370,10 +390,25 @@ final class FileApplication
     {
         StylesheetImports::enter($this->source, $file);
         try {
-            require_once $file;
+            FunctionalViews::load($file);
         } finally {
             StylesheetImports::leave();
         }
+    }
+
+    private function pageDeclaration(string $class, string $file): string
+    {
+        if (is_subclass_of($class, Page::class)) return $class;
+        $function = substr($class, 0, -4);
+        foreach ([$function, $class] as $candidate) {
+            if (FunctionalViews::declaredIn($candidate, $file)) return $candidate;
+        }
+        throw new \UnexpectedValueException("{$file} must declare {$class} as an AML View page or function {$function}(): View.");
+    }
+
+    private function newPage(string $page): Page
+    {
+        return is_subclass_of($page, Page::class) ? new $page() : new FunctionalPage($page);
     }
 
 }

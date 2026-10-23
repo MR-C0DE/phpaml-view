@@ -18,6 +18,7 @@ final class InlineEffectRegistry
     /** @param array<string, mixed> $effect */
     public static function register(string $id, array $effect): void
     {
+        $id = \AML\Engine\StateNamespace::qualify($id);
         $execution = self::executionId();
         $index = array_key_last(self::$contexts[$execution] ?? []);
         if ($index === null) throw new \LogicException('Effect() can only be called while building an AML View component body.');

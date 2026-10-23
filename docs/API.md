@@ -8,7 +8,123 @@
 - `Layout`: component that renders the active page through `Slot()`.
 - `Renderer`: initial HTML rendering entry point.
 
+## Icons (optional Lucide catalogue)
+
+Install the official pinned catalogue in the application with `aml install lucide`.
+`Icon(mixed $name): IconElement` renders an inline SVG with the regular Element
+and Style API. `size(mixed)` sets CSS width/height, `strokeWidth(mixed)` sets the
+stroke thickness, and `label(mixed)` switches from a decorative icon to an
+accessible image (`null` restores decoration). Color inherits through currentColor.
+Names, labels and styles accept natural State bindings, StateRef and read-only
+expressions/closures in class and functional views, including reactive IList rows.
+
+No CDN or provider JavaScript is used. The initial geometry is rendered by PHP;
+later name changes fetch only the requested same-origin JSON asset, with a bounded
+cache and stale-response protection. Invalid/unavailable data preserves the last
+SVG and emits `aml:render-error`. Deploy `public/assets/phpaml/lucide/` with the app.
+`aml uninstall lucide` checks PHP references and preserves modified/personal files;
+`--force` permits removal despite references. See [the complete guide](fr/icones.md).
+
+## Function pages and components
+
+`FileApplication` discovers PascalCase functions with an explicit `View` return
+type in `components/*.php` (including subdirectories) and `pages/**/page.php`.
+In `App\Views\Pages\Home`, `function Home(): View` serves the home route;
+`function HomePage(): View` is also accepted. An existing `HomePage extends Page`
+takes precedence. Existing class layouts, class components and their generated
+or handwritten factories remain supported.
+
+```php
+namespace App\Views\Pages\Home;
+
+use AML\View\View;
+use function AML\View\{body, Button, State, Text};
+
+function Home(): View
+{
+    $name = State('André');
+    return body(
+        Text($name),
+        Button('Change')->sets($name, 'Marie'),
+    );
+}
+```
+
+`body(View ...$children): GroupView` is optional. It groups siblings without
+adding a DOM element or an HTML `<body>`. Returning any `View`, including
+`VStack()`, `MainContent()` or another component, works directly.
+
+Each function component call returns a deferred view. Its PHP body runs during
+rendering in its own component scope: repeated calls, nested calls and calls
+from class components have independent local State and effects. Engine retains
+state between events and initializes it anew when navigation recreates the view.
+`Effect()` uses the same lifecycle as class components; effect identifiers are
+scoped per instance, including effects without dependencies.
+
+PHP parameter names, types, defaults, named arguments and variadics are retained.
+Defaults containing objects are evaluated once per call, never during discovery.
+Scalar props derived from parent State retain their reactive display/form bindings
+when forwarded through functions and classes. To explicitly share and update a
+local `State()` reference, declare a `AML\Engine\StateRef` parameter and use the
+existing action helpers (`sets()`, `increments()`, etc.). Assigning to an ordinary
+PHP parameter does not itself declare or update browser state.
+
+For dynamic file routes, matching parameter names receive route strings. The
+optional parameters `array $params`, `array $query` and `?Throwable $error` expose
+the existing page routing context. Function pages use default `PageMetadata`;
+retain a page class when overriding `metadata()` is needed. Loading/error/404
+state files also accept the corresponding `Loading`, `Error`, `NotFound` functions.
+
+Discovery prepares function boundaries in memory without modifying source files
+or creating a disk cache. Original filenames, line numbers, `__FILE__`, `__DIR__`,
+lexical imports and relative CSS modules are preserved. The declarations must be
+loaded through `FileApplication` before direct function calls; an ordinary PHP
+`require` does not install these boundaries. Restart persistent workers after
+changing declarations, as with classes. Functions must return `View` by value;
+lowercase helpers, closures, methods and functions with other return types are
+not registered as function components. No JavaScript or Engine module is added.
+
 ## State and validation
+
+`State(mixed $initial, ?string $type = null): AML\Engine\StateRef` creates local
+frontend state during `body()` construction, including helpers called by it.
+Import the function with `use function AML\View\State;`; the `#[State]` attribute
+continues to use `use AML\View\State;`.
+
+```php
+$count = State(0);                        // int
+$name = State('André');                   // string
+$optional = State(null, type: '?string');
+$selection = State(0, type: 'int|string');
+
+return VStack(
+    Text($count),
+    Button('+')->increments($count),
+    Button('Reset')->sets($count, 0),
+    TextField('name', $name),
+);
+```
+
+The reference is accepted by reactive displays, forms and Style, and by
+`increments()`, `decrements()`, `updates()`, `sets()` and `toggles()`.
+`ClientAction` targets also accept references, retaining their original owner
+when forwarded to a child component. Type inference covers strings, integers,
+floats, booleans, arrays and null. Explicit scalar/array unions, nullable types,
+`true`, `false` and `mixed` are supported. Values must be browser-safe scalars,
+null or arrays of those values. Initial values are checked strictly (an integer
+may initialize a float); writes use Engine's existing state type enforcement.
+`State(null)` infers null alone: declare a nullable type to allow later values.
+
+State is isolated per rendered component, retained between its client events
+and initialized anew when the component is recreated. Each call creates a
+distinct state; identity follows construction order. It is not persistent
+storage and cannot be declared inside a browser event or outside a component
+render. `$count` is a reference object, so `$count++`, `$count = 3` and a closure
+capturing it as a scalar are not state updates. Use the action helpers above;
+for example `sets($count, $count->plus(1))`. `$count->initial` is only the initial
+PHP value. String placeholders such as `{count}` still refer to component
+properties; use `Text($count)` or `$count->prefixedBy('Count: ')` for local state.
+For natural PHP assignments in event closures, keep typed `#[State]` properties.
 
 `Text()` recognizes state placeholders while a component is being rendered:
 
@@ -150,11 +266,38 @@ does not need a semantic or styled container.
 - Links/media: `target()`, `rel()`, `language()`, `referrerPolicy()`,
   `download()`, `controls()`, `autoplay()`, `muted()`, `loop()`,
   `playsInline()`, `poster()`, `preload()`, `loading()`, `allowFullScreen()`.
-- HTML/CSS: `class(...$names)`, `attribute()`, `style()`.
+- HTML/CSS: `class(...$names)`, `attribute()`, `style(property, value)` or
+  `style(Style|array)`. `Style::create()` / `Style::make()` build immutable fluent
+  styles; `Style::create(namedDefinitions)` returns a collection;
+  `Style::create('home.style')` loads a local CSS module relative to the calling
+  PHP file. Style values bind automatically to State, including calculations,
+  interpolation, read-only closures and forwarded component inputs. Local CSS
+  modules receive State through explicit CSS custom-property values. Style
+  variants include `media()`, `supports()`, `container()`, `focusWithin()`,
+  `checked()`, `valid()`, `invalid()`, `firstChild()`, `lastChild()`, `nthChild()`,
+  `before()`, `after()` and `placeholder()` alongside existing hover/focus states.
+  `keyframes(name, frames)` scopes local animation names and accepts reactive
+  declarations per step. See [Style API and scope](fr/styles.md) for composition,
+  units, conditions, animation limits and rendering contracts.
 - Events: `onClick()`, `onSubmit()`, `onInput()`, `onChange()`, `onFocus()` and
   `onBlur()` accept a `ClientInstruction` or restricted frontend PHP closure.
 - `submit()` marks a button as the explicit form submitter.
 - Actions: `disabled()`, `status()`, `loadingLabel()`.
+
+See the [native component method guide](fr/composants-natifs.md) for element-specific
+behavior and examples. A later handler replaces the earlier handler for the same
+event. `Button()->value()` sets its submitted value, not its label. `loadingLabel()`
+temporarily replaces a triggering button's label during API/Files work, including
+a form submitter; it preserves reactive children and restores the content on
+completion. `status()` configures the PHP-rendered status; it does not subscribe
+to an asynchronous action. Visibility, reactive disabling and pending work each
+retain their own disabled state.
+
+Radio models keep each option's value and update its checked state. A multiple
+select model reads/writes an array of strings. `Select()->value()` also updates
+the initial HTML selection. Form validation respects native constraints and
+disabled fieldsets, keeps existing `aria-describedby` help and uses distinct
+error IDs for controls with repeated names.
 
 ## Routing
 
@@ -256,6 +399,29 @@ View merges them with existing classes and removes duplicates. Global selectors
 belong in `stylesheets/base.css`; page, component, layout, and state styles
 should use class-based selectors.
 
+Declare `import('pages/home.css')` at the top level of a view file to include
+that stylesheet; paths are relative to `stylesheets/`. Only imported files,
+`stylesheets/base.css`, and CSS under `themes/` enter `FileApplication::styles()`.
+The bundle remains global across routes, includes state imports before those
+states are rendered, and deduplicates shared files. Removing the last import
+removes its CSS on the next reload/build. `stylesheetImports()` lists owners.
+
+## Picker, Toggle and Calendar
+
+`Picker(string $name, array $options, string|int|StateRef|null $selected = null)`
+retains Select's options, State bindings and native validation.
+`Toggle(string $name = '', bool|StateRef $checked = false, string $value = '1')`
+uses a native checkbox with the switch role and a boolean State.
+`Calendar(string $name = '', string|StateRef|null $value = null, string $locale = 'en', int $firstDayOfWeek = 1)`
+adds an inline month grid to a native date field. It accepts civil dates in
+`YYYY-MM-DD` format, min/max/step, native required validation, EN/FR locales,
+and keyboard day/month/year navigation. Empty input writes `''` into State.
+All three support natural State bindings and forwarded child form properties.
+
+Calendar's inherited attributes target its native input; its wrapper is
+`.aml-calendar`. Presentation remains application CSS. See the
+[complete guide and styled example](fr/controles.md).
+
 ## Themes
 
 `ThemeProvider(default: 'system', content: ..., themes: ['light', 'dark'])`
@@ -347,6 +513,30 @@ Supported roots are `type`, `detail`, `key`, `code`, `repeat`, `button`,
 
 ## Rich UI and collections
 
+- `IList(...$items)` returns `IListView`, an `Element` with native `<ul>` semantics
+  by default. Accept scalar/view arguments, one indexed array, or one array
+  `StateRef`. A direct class State array also binds automatically.
+  `unordered()` / `type('unordered')` and `ordered()` / `type('ordered')` select
+  the native tag. Use `start(int)`, `reversed(bool = true)`, `marker(string)`,
+  `markerPosition('inside'|'outside')`, and `plain()` for list presentation.
+  These options also accept StateRef, natural class State expressions and pure closures.
+  Ordered numbering options are retained but omitted while unordered.
+  `items(array|StateRef|Closure|DisplayValue)` replaces the source; `label(path)` and `key(path)`
+  select record fields (defaults `label`, `id`). `renderItem(Closure)` receives
+  `CollectionItem` and returns a View **inside** the generated `li`; existing
+  `ListItem()` children are accepted directly by the static factory. Scalar
+  templates use `$item->text('value')`. `$item->state(path, fallback)` supplies a
+  live field reference for text, styles, links, conditions, props, models and
+  event closures. Natural `$item->value(path)` arguments preserve their source
+  dependency; ordinary PHP control flow remains initial construction. Editable
+  records require unique stable keys. `editable(StateRef)` connects calculated
+  projections to their original records explicitly; projected field paths write
+  to the same source field, without inverse transformations. `empty(text|View)` declares a placeholder
+  that follows array emptiness, and `sortable(bool = true)` enables pointer or
+  Alt+Arrow reordering of a State source. Normal Element styles, attributes,
+  references and events apply to the list. Invalid options, non-indexed sources
+  and duplicate initial keys are rejected. Prefer stable string/integer keys
+  for interactive rows. See the [complete list API](fr/composants-natifs.md#listes-avec-ilist).
 - `Modal($open, $title, $content, $close = null)` renders an accessible dialog,
   traps focus while open, closes with Escape, and restores reactive state.
 - `Tabs($selected, $tabs, $label = 'Tabs')` implements the ARIA tab pattern and
@@ -405,7 +595,7 @@ Menus and popovers close on outside click or Escape. Menu items support arrow ke
 - `UploadForm(...$children)` emits native multipart form encoding.
 - `ConditionalField($state, $field, $equals)` makes inactive controls inert.
 - `MultiStepForm($step, $steps, ...$actions)` provides bounded, accessible steps.
-- `Form(...)->preserve('draft-key')` restores non-file values after navigation or a server error.
+- `Form(...)->preserve('draft-key')` restores ordinary values after navigation or a server error. Password, hidden, file, disabled, payment and one-time-code fields are excluded, as are fields with `autocomplete="off"`. Old draft values for excluded controls are discarded during restoration. Mark other sensitive inputs with `->autocomplete('off')` or avoid preserving the form.
 
 Call `AMLEngine.clearFormDraft('draft-key')` after confirmed server success.
 Browser `accept` filters are only hints: applications uploading files must validate
@@ -458,13 +648,29 @@ and [the example](../examples/niveau-10/page.php).
   `new` in the view tree.
 - `Component(class-string $class, mixed ...$arguments)` instantiates a custom
   component through the generic factory.
-- A component file can expose a same-name function such as `Navigation()`.
-  `FileApplication` loads component files before pages and layouts so these
-  named factories are immediately available.
-- `aml make:view-component <name>` generates both the component class and its
-  same-name factory.
+- `FileApplication` automatically defines a same-name function such as `Navigation()`
+  for each instantiable component declared under `components/`, before loading pages
+  and layouts. The constructor supplies parameter names, types, defaults, references
+  and variadics; the return type is the concrete component class. Inherited
+  constructors retain their original type/default scope. Object defaults remain lazy.
+- Handwritten functions take precedence. Pages, layouts, anonymous/abstract classes
+  and non-public constructors are excluded. Functions are generated in memory, with
+  no writable cache requirement. Import them with `use function` across namespaces.
+- `aml make:view-component <name>` generates only the component class; there is no
+  second signature to maintain. Outside `FileApplication`, use a manual factory,
+  the generic `Component()` helper or direct construction.
 
 Direct construction remains supported for backward compatibility.
+
+Constructor props that directly forward a State are writable in frontend events:
+`$this->a = 'Updated'`, compound assignments and array updates write the originating
+State, including through nested named factories. Prop types and the originating
+State type are checked before storage; uncaught event errors retain the existing
+rollback behavior. A mutable promoted constructor prop with a literal/default
+value receives instance-local state. `#[State]` fields retain their independent
+state identity. Calculated inputs and hooked properties remain read-only through
+this shorthand; direct writes to `readonly` properties fail. Constructor PHP
+objects are not live references: these mutations execute in the browser.
 
 ## Testing API
 
@@ -561,3 +767,17 @@ helpers, `filter_var_array`, grapheme functions, `Normalizer`, the `NumberFormat
 adapter, dynamic `new`/static targets and nullsafe receiver chains. The number
 formatter runs in events; pure grapheme and normalization functions also support
 reactive text. PHP rendering requires ext-intl for these Unicode adapters.
+
+### Calculated IList sources and captured StateRef
+
+`IList(fn () => array_filter($items, ...))` and `IList()->items(fn () => ...)`
+accept read-only compiled array projections, with initial HTML and dependency
+tracking. Natural calculations on class State properties remain supported.
+Filter keys are normalized in iteration order; explicit record keys preserve
+DOM identity. Sortable lists still require a direct writable State source.
+
+Frontend event/effect closures can capture StateRef handles with `use ($state)`
+or arrow syntax. Reads and writes retain the owning component and type rules,
+including nested closures. Ordinary captures and existing action APIs retain
+their value semantics. Display closures can read these handles but cannot mutate
+them. See the French [list guide](fr/composants-natifs.md#listes-avec-ilist).
