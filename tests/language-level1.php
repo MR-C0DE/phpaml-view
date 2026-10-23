@@ -14,6 +14,11 @@ if (in_array('--engine-root', $argv, true)) {
     exit;
 }
 
+if (in_array('--eval-asset', $argv, true)) {
+    echo \AML\Engine\EngineRuntime::evalAssetPath();
+    exit;
+}
+
 $cases = [];
 foreach ([true, false] as $enabled) {
     $page = new LanguageLevelOne();

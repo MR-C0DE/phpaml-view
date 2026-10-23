@@ -8,7 +8,7 @@ globalThis.location = new URL('https://example.test/app'); globalThis.HTMLButton
 globalThis.addEventListener = () => {}; globalThis.document = {querySelector: () => null, addEventListener: () => {}};
 globalThis.CustomEvent = class {constructor(type, options) {this.type = type; this.detail = options.detail;}};
 const {execute} = await import(pathToFileURL(resolve(engine, 'src-js/actions-runtime.js')));
-await import(pathToFileURL(resolve(engine, 'assets/engine-eval-0.1.0-beta.9.min.js')));
+await import(pathToFileURL(execFileSync(php, [resolve(directory, 'language-level1.php'), '--eval-asset'], {encoding: 'utf8'}).trim()));
 const {compile: compileEval} = globalThis.AMLPhpEval;
 const {installEvalCompiler} = await import(pathToFileURL(resolve(engine, 'src-js/core/php-eval.js')));
 installEvalCompiler(compileEval);
