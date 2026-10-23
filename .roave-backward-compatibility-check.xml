@@ -22,7 +22,7 @@
     <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#decrements\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
     <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#sets\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
     <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#toggles\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
-    <ignored-regex>#^\[BC\]\ CHANGED:\ Parameter\ preserveArray\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
-    <ignored-regex>#^\[BC\]\ CHANGED:\ Parameter\ forceExpression\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ ADDED:\ Parameter\ preserveArray\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ ADDED:\ Parameter\ forceExpression\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
   </baseline>
 </roave-bc-check>
