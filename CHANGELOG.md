@@ -6,6 +6,12 @@ All notable changes follow Semantic Versioning.
 
 ## 0.1.0-beta.14 — 2026-10-23
 
+- Migration for custom Element subclasses: overrides of style/State helper
+  methods must accept their widened parameters. Existing calls are retained;
+  see [the migration guide](docs/fr/migration-beta14.md). Align the public View
+  version with the package and preserve the compiling PHP's grapheme substring
+  collation behavior across PHP/Intl updates.
+
 - Serialize completed compiler blocks once per compilation, preserving the
   instruction format and source locations while reducing deep-nesting cost.
   Keep the JSON depth protection and report its precise limit and PHP origin.

@@ -226,7 +226,8 @@ check('Alert exposes readable status factories with accessible roles', function 
 });
 
 check('Public beta contract excludes the removed server runtime', function (): void {
-    expect(AMLView::VERSION === '0.1.0-beta.13', 'AML View version is inconsistent.');
+    $manifest = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true, 512, JSON_THROW_ON_ERROR);
+    expect(AMLView::VERSION === $manifest['extra']['phpaml']['version'], 'AML View version differs from its package manifest.');
     foreach ([
         'AML\\View\\BrowserRuntime',
         'AML\\View\\InteractionKernel',

@@ -9,6 +9,7 @@ Engine exécute les états et événements ordinaires dans le navigateur.
 La [matrice de compatibilité](compatibilite.md) réunit les fonctionnalités,
 leurs limites et le catalogue natif issu du registre Engine.
 
+Voir aussi : [migration bêta.14 des sous-classes Element](migration-beta14.md).
 Voir aussi : [textes réactifs dans les composants](textes-reactifs.md).
 Voir aussi : [Picker, Toggle et Calendar](controles.md).
 Voir aussi : [Icon et le catalogue Lucide optionnel](icones.md).

@@ -1,7 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <roave-bc-check>
   <baseline>
-    <!-- This release intentionally updates its public version marker only. -->
-    <ignored-regex>#^\[BC\] CHANGED: Value of constant AML\\View\\AMLView::VERSION changed from '0\.1\.0-beta\.12' to '0\.1\.0-beta\.13'$#</ignored-regex>
+    <!-- Exact reviewed beta.14 changes only. Caller syntax is retained; Element override
+         signatures require the migration documented in docs/fr/migration-beta14.md.
+         FrontendDisplayCompiler is an internal compiler trait. All other changes fail. -->
+    <ignored-regex>#^\[BC\]\ CHANGED:\ Value\ of\ constant\ AML\\View\\AMLView::VERSION\ changed\ from\ '0\.1\.0\-beta\.13'\ to\ '0\.1\.0\-beta\.14'$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$name\ of\ AML\\View\\Element\#style\(\)\ changed\ from\ string\ to\ string\|AML\\View\\Style\|array$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$value\ of\ AML\\View\\Element\#style\(\)\ changed\ from\ string\|int\|float\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$pixels\ of\ AML\\View\\Element\#padding\(\)\ changed\ from\ int\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$pixels\ of\ AML\\View\\Element\#spacing\(\)\ changed\ from\ int\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$pixels\ of\ AML\\View\\Element\#gap\(\)\ changed\ from\ int\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$alignment\ of\ AML\\View\\Element\#alignment\(\)\ changed\ from\ string\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$pixels\ of\ AML\\View\\Element\#fontSize\(\)\ changed\ from\ int\|float\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$weight\ of\ AML\\View\\Element\#fontWeight\(\)\ changed\ from\ string\|int\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$height\ of\ AML\\View\\Element\#lineHeight\(\)\ changed\ from\ int\|float\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$pixels\ of\ AML\\View\\Element\#letterSpacing\(\)\ changed\ from\ int\|float\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$alignment\ of\ AML\\View\\Element\#textAlign\(\)\ changed\ from\ string\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$color\ of\ AML\\View\\Element\#textColor\(\)\ changed\ from\ string\ to\ mixed$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$property\ of\ AML\\View\\Element\#updates\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#increments\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#decrements\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#sets\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ The\ parameter\ \$state\ of\ AML\\View\\Element\#toggles\(\)\ changed\ from\ string\ to\ string\|AML\\Engine\\StateRef$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ Parameter\ preserveArray\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
+    <ignored-regex>#^\[BC\]\ CHANGED:\ Parameter\ forceExpression\ was\ added\ to\ Method\ displayClosure\(\)\ of\ class\ AML\\View\\FrontendDisplayCompiler$#</ignored-regex>
   </baseline>
 </roave-bc-check>

@@ -219,13 +219,16 @@ The initial condition grammar supports boolean states and comparisons with
 scalar literals, state values or calculated local expressions: `==`, `===`,
 `!=`, `!==`, `>`, `>=`, `<` and `<=`.
 
+Custom subclasses that override Element style or State methods must use the
+widened parameter signatures described in the [beta.14 migration guide](docs/fr/migration-beta14.md). Existing calls and ordinary Page/Component subclasses remain supported.
+
 ## Frontend variables and scalar types
 
 Frontend handlers support invocation-local variables, PHP scalar casts,
 `gettype()`, browser-console `var_dump()`, file and component constants, and
 single/double-quoted strings with interpolation and PHP escapes. Local
 assignments snapshot their values instead of retaining live state references.
-Use View beta.13 together with Engine beta.9. CLI beta.45 selects these
+Use View beta.14 together with Engine beta.10. CLI beta.46 selects these
 compatible minimum versions when creating a View application. See the
 [Level 1 guide (French)](docs/fr/niveau-1-variables-types.md) for examples,
 precise limits, and the native-PHP/runtime parity check.
